@@ -101,6 +101,16 @@ jQuery(document).on('click', function (e) {
     }
 });
 
+/** Сброс выбранного ПВЗ (при смене города, региона и т.п.) */
+function ndResetPvzSelection() {
+    ndDeleteCookie('yd_pvz_code');
+    ndDeleteCookie('yd_pvz_address');
+    ydWidgetSelectedPointAddress = false;
+    ydWidgetPointCode = false;
+    ydWidgetPointName = false;
+    jQuery('.nd-pvz-selected').remove();
+}
+
 /** Показать блок с выбранным ПВЗ рядом с кнопкой */
 function ndShowPvzSelected(address) {
     jQuery('.nd-pvz-selected').remove();
@@ -394,6 +404,8 @@ function ndAttachCitySuggest() {
             var $state = jQuery('#' + stateId);
             if ($state.length && item.region) $state.val(item.region);
             $dropdown.hide().empty();
+            // Сброс ПВЗ при смене города — старый ПВЗ из другого города невалиден
+            ndResetPvzSelection();
             jQuery(document.body).trigger('update_checkout');
         }
 
@@ -470,10 +482,12 @@ jQuery(document).ready(function () {
     });
     jQuery('#billing_city').on('blur',function(){
         if (!jQuery('#ship-to-different-address-checkbox').prop('checked')){
+            ndResetPvzSelection();
             setTimeout(function(){ jQuery( document.body ).trigger( 'update_checkout' ); }, 200);
         }
     });
     jQuery('#shipping_city').on('focusout',function(){
+        ndResetPvzSelection();
         setTimeout(function(){ jQuery( document.body ).trigger( 'update_checkout' ); }, 200);
     });
     jQuery('#shipping_state').on('focusout',function(){

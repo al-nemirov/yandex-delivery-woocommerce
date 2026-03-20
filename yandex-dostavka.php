@@ -843,8 +843,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $fullPackage['height']  = 0;
                 $fullPackage['width']   = 0;
 
-                $itemsVolume = 0;
-
                 // Если applyDefaultDimensions = 2, вес и габариты заданные по умолчанию применяются ко всему отправлению
                 if ( $applyDefaultDimensions === 2 ) {
                     $fullPackage['weight'] = ceil( $defaultWeight );
@@ -852,6 +850,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $fullPackage['depth']  = $defaultDepth;
                     $fullPackage['width']  = $defaultWidth;
                 } else {
+                    // Габариты: max(длина) × max(ширина) × сумма(высота) — укладка стопкой
+                    $stackMaxDepth  = 0;
+                    $stackMaxWidth  = 0;
+                    $stackSumHeight = 0;
+
                     foreach ( $package['contents'] as $cartProduct ) {
                         $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
 
@@ -860,9 +863,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         }
 
                         $itemWeight = ( bxbGetWeight( $product, $cartProduct['variation_id'] ) ) * $weightC;
-                        $itemHeight = (int) $product->get_height() * $dimensionC;
-                        $itemDepth  = (int) $product->get_length() * $dimensionC;
-                        $itemWidth  = (int) $product->get_width() * $dimensionC;
+                        $itemHeight = (int) round( (float) $product->get_height() * $dimensionC );
+                        $itemDepth  = (int) round( (float) $product->get_length() * $dimensionC );
+                        $itemWidth  = (int) round( (float) $product->get_width() * $dimensionC );
 
                         // Если applyDefaultDimensions = 1 и габариты у товара не заполнены, используем значения по умолчанию для этого товара
                         if ( $applyDefaultDimensions === 1 ) {
@@ -879,28 +882,27 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                             return false;
                         }
 
-                        $effectiveWeight = ( $itemWeight <= 0 || $itemWeight < $minWeight ) ? ceil( $defaultWeight ) : ceil( $itemWeight );
+                        $effectiveWeight = ( $itemWeight <= 0 ) ? ceil( $defaultWeight ) : ceil( $itemWeight );
                         $fullPackage['weight'] += $cartProduct['quantity'] * $effectiveWeight;
 
-                        if ( ( $itemWidth + $itemHeight + $itemDepth ) == 0 ) {
-                            $itemVolume = 0;
-                        } else {
-                            $itemVolume = (int) $cartProduct['quantity'] * ( (float) $itemWidth * (float) $itemHeight * (float) $itemDepth );
+                        // Укладка стопкой: длина и ширина = макс. из товаров, высота складывается
+                        if ( $itemDepth > 0 || $itemWidth > 0 || $itemHeight > 0 ) {
+                            $stackMaxDepth  = max( $stackMaxDepth, $itemDepth );
+                            $stackMaxWidth  = max( $stackMaxWidth, $itemWidth );
+                            $stackSumHeight += (int) $cartProduct['quantity'] * $itemHeight;
                         }
-
-                        $itemsVolume += $itemVolume;
 
                         if ( ( $maxHeight > 0 && $itemHeight > $maxHeight ) || ( $maxDepth > 0 && $itemDepth > $maxDepth ) || ( $maxWidth > 0 && $itemWidth > $maxWidth ) ) {
                             return false;
                         }
                     }
-                }
 
-                if ( $itemsVolume !== 0 ) {
-                    $sideDimension         = $itemsVolume ** ( 1 / 3 );
-                    $fullPackage["width"]  += ceil( $sideDimension );
-                    $fullPackage["height"] += ceil( $sideDimension );
-                    $fullPackage["depth"]  += ceil( $sideDimension );
+                    // Применяем рассчитанные габариты стопки
+                    if ( $stackMaxDepth > 0 || $stackMaxWidth > 0 || $stackSumHeight > 0 ) {
+                        $fullPackage['depth']  = $stackMaxDepth;
+                        $fullPackage['width']  = $stackMaxWidth;
+                        $fullPackage['height'] = $stackSumHeight;
+                    }
                 }
 
                 if ( $minWeight <= $fullPackage['weight'] && $maxWeight >= $fullPackage['weight'] ) {
@@ -928,15 +930,38 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $receptionPointName = $this->get_option( 'reception_point' );
                     $sourceAddress = $receptionPointName ? $receptionPointName : get_option( 'woocommerce_store_city', '' );
 
+                    // platform_station_id склада — без него API считает по общему тарифу
+                    $sourceStationId = '';
+                    if ( $receptionPointName ) {
+                        $sourceStationId = getReceptionPointCodeByName( $receptionPointName );
+                    }
+
                     // Адрес назначения: для ПВЗ — точный адрес пункта (из cookie),
                     // для курьера — город + индекс из формы
                     $destinationAddress = trim( $state . ' ' . $city );
-                    if ( $this->self_type && ! empty( $_COOKIE['yd_pvz_address'] ) ) {
-                        $pvzAddr = sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_address'] ) );
-                        if ( $pvzAddr ) {
-                            // Для ПВЗ: точный адрес без индекса — API сам знает координаты
-                            $destinationAddress = $pvzAddr;
+                    $destinationStationId = '';
+
+                    if ( $this->self_type ) {
+                        // ПВЗ ещё не выбран — не вызываем API, показываем заглушку
+                        if ( empty( $_COOKIE['yd_pvz_code'] ) ) {
+                            $this->add_rate( array(
+                                'id'    => $this->get_rate_id(),
+                                'label' => $this->title . ': выберите пункт выдачи',
+                                'cost'  => 0,
+                            ) );
+                            return false;
                         }
+
+                        // Адрес назначения для ПВЗ: берём из cookie, если он есть.
+                        if ( ! empty( $_COOKIE['yd_pvz_address'] ) ) {
+                            $pvzAddr = sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_address'] ) );
+                            if ( $pvzAddr ) {
+                                $destinationAddress = $pvzAddr;
+                            }
+                        }
+
+                        // platform_station_id ПВЗ
+                        $destinationStationId = sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) );
                     } elseif ( isset( $package['destination']['postcode'] ) && ! empty( $package['destination']['postcode'] ) && $package['destination']['postcode'] !== '111111' ) {
                         // Для курьера: добавляем реальный индекс (не фейковый 111111)
                         $destinationAddress .= ', ' . $package['destination']['postcode'];
@@ -945,8 +970,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     // Тариф: self_pickup для ПВЗ, time_interval для курьера
                     $tariff = $this->self_type ? 'self_pickup' : 'time_interval';
 
-                    // Оценочная стоимость в рублях (API принимает в рублях)
-                    $assessedPrice = (int) round( $orderSum );
+                    // Оценочная стоимость в копейках (API принимает в копейках)
+                    $assessedPrice = (int) round( $orderSum * 100 );
 
                     $dimensions = array(
                         'length' => max( 1, (int) $fullPackage['depth'] ),
@@ -954,25 +979,65 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'height' => max( 1, (int) $fullPackage['height'] ),
                     );
 
-                    $result = $yd_client->calculate_price(
-                        $sourceAddress,
-                        $destinationAddress,
+                    // Кэш в рамках одного запроса — yd_self и yd_self_after
+                    // не дублируют API-вызов если параметры одинаковые
+                    $cacheKey = md5( wp_json_encode( array(
+                        $sourceStationId ?: $sourceAddress,
+                        $destinationStationId ?: $destinationAddress,
                         $tariff,
                         (int) $fullPackage['weight'],
                         $assessedPrice,
-                        $dimensions
-                    );
+                        $dimensions,
+                    ) ) );
+
+                    if ( ! isset( $GLOBALS['yd_pricing_cache'][ $cacheKey ] ) ) {
+                        // Debug: логируем все параметры запроса
+                        error_log( '[YD] === CALC REQUEST (' . $this->id . ') ===' );
+                        error_log( '[YD] source=' . $sourceAddress . ' (station_id=' . ( $sourceStationId ?: 'N/A' ) . ')' );
+                        error_log( '[YD] dest=' . $destinationAddress . ' (station_id=' . ( $destinationStationId ?: 'N/A' ) . ')' );
+                        error_log( '[YD] tariff=' . $tariff . ', weight=' . (int) $fullPackage['weight'] . 'g' );
+                        error_log( '[YD] dimensions: L=' . $dimensions['length'] . ' W=' . $dimensions['width'] . ' H=' . $dimensions['height'] . ' cm' );
+                        error_log( '[YD] assessed_price=' . $assessedPrice . ' kopecks (' . round( $assessedPrice / 100, 2 ) . ' RUB), orderSum=' . $orderSum . ' RUB' );
+
+                        $GLOBALS['yd_pricing_cache'][ $cacheKey ] = $yd_client->calculate_price(
+                            $sourceAddress,
+                            $destinationAddress,
+                            $tariff,
+                            (int) $fullPackage['weight'],
+                            $assessedPrice,
+                            $dimensions,
+                            $sourceStationId,
+                            $destinationStationId
+                        );
+                    } else {
+                        error_log( '[YD] === CALC CACHED (' . $this->id . ') === reusing result from previous method' );
+                    }
+
+                    $result = $GLOBALS['yd_pricing_cache'][ $cacheKey ];
 
                     $costReceived = false;
 
                     if ( ! is_wp_error( $result ) && isset( $result['pricing_total'] ) ) {
                         $costReceived = (float) $result['pricing_total'];
+                        // Debug: логируем все поля ответа
+                        error_log( '[YD] === CALC RESPONSE ===' );
+                        error_log( '[YD] pricing_total=' . ( $result['pricing_total'] ?? 'N/A' ) );
+                        if ( isset( $result['pricing'] ) ) {
+                            error_log( '[YD] pricing (base)=' . $result['pricing'] );
+                        }
+                        if ( isset( $result['pricing_commission_on_delivery_payment'] ) ) {
+                            error_log( '[YD] commission_rate=' . $result['pricing_commission_on_delivery_payment'] );
+                        }
+                        if ( isset( $result['pricing_commission_on_delivery_payment_amount'] ) ) {
+                            error_log( '[YD] commission_amount=' . $result['pricing_commission_on_delivery_payment_amount'] );
+                        }
                     } else {
                         // API не ответил — используем фиксированную стоимость
                         $fixedCost = (float) $this->get_option( 'fixed_cost', 350 );
                         $costReceived = $fixedCost;
                         $apiErr = is_wp_error( $result ) ? $result->get_error_message() : 'pricing_total not found';
                         error_log( '[YD] calculate_price fallback to fixed_cost=' . $fixedCost . '. API error: ' . $apiErr );
+                        error_log( '[YD] Full API response: ' . wp_json_encode( $result ) );
                     }
 
                     // Срок доставки
@@ -1119,6 +1184,29 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     }
 
     add_filter( 'woocommerce_shipping_methods', 'yd_shipping_method' );
+
+    /**
+     * Включаем PVZ code в хэш пакета доставки, чтобы WooCommerce
+     * инвалидировал кэш shipping rates при смене выбранного ПВЗ.
+     */
+    add_filter( 'woocommerce_cart_shipping_packages', function( $packages ) {
+        $pvz_code = isset( $_COOKIE['yd_pvz_code'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) : '';
+        foreach ( $packages as &$package ) {
+            $package['yd_pvz_code'] = $pvz_code;
+        }
+        return $packages;
+    } );
+
+    /**
+     * Для ПВЗ-методов с cost=0 (ПВЗ ещё не выбран) — убираем цену из label,
+     * чтобы не показывать «Бесплатно» или «0 ₽».
+     */
+    add_filter( 'woocommerce_cart_shipping_method_full_label', function( $label, $method ) {
+        if ( strpos( $method->get_id(), 'yd_self' ) !== false && (float) $method->get_cost() == 0 ) {
+            return $method->get_label();
+        }
+        return $label;
+    }, 10, 2 );
 
     function yd_add_meta_tracking_code_box( $post_type, $post )
     {
@@ -2250,9 +2338,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
 
             // Виджет выбора ПВЗ
-            wp_enqueue_script( 'yd_pvz_widget', plugin_dir_url( __FILE__ ) . 'js/yd-pvz-widget.js', array( 'jquery' ), '2.6.0', true );
+            wp_enqueue_script( 'yd_pvz_widget', plugin_dir_url( __FILE__ ) . 'js/yd-pvz-widget.js', array( 'jquery' ), '2.7.0', true );
 
-            wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . ( 'js/yandex-dostavka.js' ), [ 'jquery', 'yd_pvz_widget' ], '2.45' );
+            wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . ( 'js/yandex-dostavka.js' ), [ 'jquery', 'yd_pvz_widget' ], '2.50' );
 
             wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), '3.0.0' );
 
@@ -2418,6 +2506,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 'samesite' => 'Lax',
             ) );
         }
+
+        // Принудительно чистим кэш shipping rates WooCommerce при смене ПВЗ,
+        // чтобы update_checkout пересчитал цену с новым platform_station_id
+        if ( $code && function_exists( 'WC' ) && WC()->session ) {
+            $packages = WC()->cart ? WC()->cart->get_shipping_packages() : array();
+            foreach ( $packages as $key => $pkg ) {
+                WC()->session->__unset( 'shipping_for_package_' . $key );
+            }
+        }
+
         wp_send_json_success();
     }
 

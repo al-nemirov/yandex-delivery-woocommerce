@@ -247,9 +247,10 @@
 
             if (typeof this.onSelect === 'function') {
                 this.onSelect(point);
-            }
-
-            if (typeof jQuery !== 'undefined') {
+                // update_checkout вызывается из onSelect callback (yandex-dostavka.js)
+                // после AJAX yd_update — не дублируем здесь
+            } else if (typeof jQuery !== 'undefined') {
+                // Fallback: если onSelect не задан, обновляем сами
                 jQuery(document.body).trigger('update_checkout');
             }
         },

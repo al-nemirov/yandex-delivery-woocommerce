@@ -98,22 +98,40 @@ class Yandex_Delivery_API {
     /**
      * Рассчитать стоимость доставки.
      *
-     * @param string $source_address      Адрес отправления
-     * @param string $destination_address  Адрес назначения
-     * @param string $tariff              'time_interval' | 'self_pickup'
-     * @param int    $weight_grams        Вес в граммах
-     * @param int    $assessed_price      Оценочная стоимость (руб, копейки)
-     * @param array  $dimensions          ['length' => cm, 'width' => cm, 'height' => cm]
+     * @param string $source_address          Адрес отправления
+     * @param string $destination_address     Адрес назначения
+     * @param string $tariff                  'time_interval' | 'self_pickup'
+     * @param int    $weight_grams            Вес в граммах
+     * @param int    $assessed_price          Оценочная стоимость (копейки)
+     * @param array  $dimensions              ['length' => cm, 'width' => cm, 'height' => cm]
+     * @param string $source_station_id       platform_station_id склада (из yd_reception_points)
+     * @param string $destination_station_id  platform_station_id ПВЗ (из yd_pvz_code cookie)
      * @return array|WP_Error
      */
-    public function calculate_price( $source_address, $destination_address, $tariff, $weight_grams, $assessed_price, $dimensions = array() ) {
+    public function calculate_price( $source_address, $destination_address, $tariff, $weight_grams, $assessed_price, $dimensions = array(), $source_station_id = '', $destination_station_id = '' ) {
         $dx = isset( $dimensions['length'] ) ? (int) $dimensions['length'] : 10;
         $dy = isset( $dimensions['width'] )  ? (int) $dimensions['width']  : 10;
         $dz = isset( $dimensions['height'] ) ? (int) $dimensions['height'] : 10;
 
-        return $this->post( '/api/b2b/platform/pricing-calculator', array(
-            'source'               => array( 'address' => $source_address ),
-            'destination'          => array( 'address' => $destination_address ),
+        // Source: используем platform_station_id если есть (как при создании заказа)
+        $source = array();
+        if ( ! empty( $source_station_id ) ) {
+            $source['platform_station_id'] = $source_station_id;
+        } else {
+            $source['address'] = $source_address;
+        }
+
+        // Destination: для ПВЗ — platform_station_id, для курьера — address
+        $destination = array();
+        if ( ! empty( $destination_station_id ) ) {
+            $destination['platform_station_id'] = $destination_station_id;
+        } else {
+            $destination['address'] = $destination_address;
+        }
+
+        $body = array(
+            'source'               => $source,
+            'destination'          => $destination,
             'tariff'               => $tariff,
             'total_assessed_price' => (int) $assessed_price,
             'total_weight'         => (int) $weight_grams,
@@ -127,7 +145,17 @@ class Yandex_Delivery_API {
                     ),
                 ),
             ),
-        ) );
+        );
+
+        error_log( '[YD API] pricing-calculator REQUEST: ' . wp_json_encode( $body ) );
+
+        $result = $this->post( '/api/b2b/platform/pricing-calculator', $body );
+
+        if ( ! is_wp_error( $result ) ) {
+            error_log( '[YD API] pricing-calculator RESPONSE: ' . wp_json_encode( $result ) );
+        }
+
+        return $result;
     }
 
     // ─── Pickup Points ───────────────────────────────────────
