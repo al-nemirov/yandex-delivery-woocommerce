@@ -127,42 +127,41 @@ yandex-dostavka/
 
 ### Расчёт стоимости — как работает
 
+> **Покупатель на чекауте → `calculate_shipping()`**
+
+**1. Собираем вес и габариты из корзины**
+- Укладка стопкой: `max(L) × max(W) × Σ(H)`
+- Округление: `(int)round(value * dimensionCoeff)`
+
+**2. Определяем source (склад)**
+- `reception_point` → `getReceptionPointCodeByName()` → `platform_station_id`
+- Источник: таблица БД `yd_reception_points`
+
+**3. Определяем destination (ПВЗ)**
+- Нет cookie `yd_pvz_code` → заглушка «выберите пункт выдачи», `return`
+- Есть cookie → `platform_station_id`
+
+**4. Проверяем `$GLOBALS` кэш** (`md5` параметров)
+- Есть → используем кэш (без API-вызова)
+- Нет → вызываем API ↓
+
+**5. POST** `/api/b2b/platform/pricing-calculator`
+
+```json
+{
+  "source": { "platform_station_id": "0199f267..." },
+  "destination": { "platform_station_id": "0193c0b8..." },
+  "tariff": "self_pickup",
+  "total_assessed_price": 244960,
+  "total_weight": 1264,
+  "places": [{ "physical_dims": { "dx": 21, "dy": 14, "dz": 6, "weight_gross": 1264 } }]
+}
 ```
-Покупатель на чекауте
-        │
-        ▼
-┌─ calculate_shipping() ──────────────────────────┐
-│                                                  │
-│  1. Собираем вес и габариты из корзины           │
-│     - Укладка стопкой: max(L) × max(W) × Σ(H)   │
-│     - Округление: (int)round(value * dimensionC) │
-│                                                  │
-│  2. Определяем source (склад)                    │
-│     - reception_point → getReceptionPointCodeByName()
-│     - → platform_station_id (из БД yd_reception_points)
-│                                                  │
-│  3. Определяем destination (ПВЗ)                 │
-│     - Нет cookie yd_pvz_code → заглушка, return  │
-│     - Есть cookie → platform_station_id          │
-│                                                  │
-│  4. Проверяем $GLOBALS кэш (md5 параметров)      │
-│     - Есть → используем кэш (без API-вызова)     │
-│     - Нет → вызываем API                         │
-│                                                  │
-│  5. POST /api/b2b/platform/pricing-calculator    │
-│     {                                            │
-│       "source": {"platform_station_id": "..."},  │
-│       "destination": {"platform_station_id": "..."},
-│       "tariff": "self_pickup",                   │
-│       "total_assessed_price": 244960,  // копейки│
-│       "total_weight": 1264,            // граммы │
-│       "places": [{"physical_dims": {...}}]       │
-│     }                                            │
-│                                                  │
-│  6. Ответ: {"pricing_total": "226.5 RUB"}        │
-│     → + addcost + markup_percent → add_rate()    │
-└──────────────────────────────────────────────────┘
-```
+
+> `total_assessed_price` — в **копейках**, `total_weight` — в **граммах**
+
+**6. Ответ** → `{"pricing_total": "226.5 RUB", "delivery_days": 3}`
+- Финальная цена = `pricing_total` + `addcost` (₽) + `markup_percent` (%) → `add_rate()`
 
 ### Кэширование и инвалидация
 
