@@ -1,7 +1,7 @@
 === Яндекс Доставка для WooCommerce ===
 Contributors: al-nemirov
 Tags: доставка, woocommerce, яндекс, shipping, delivery, pvz, курьер
-Stable tag: 2.0.0
+Stable tag: 2.1.0
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
@@ -123,6 +123,28 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 WooCommerce → МойСклад Яндекс — введите логин/пароль, UUID организации и товара по умолчанию.
 
 == Changelog ==
+
+= 2.1.0 =
+
+**Внимание: отработан и протестирован только тариф self_pickup (ПВЗ). Курьерская доставка (time_interval) не тестировалась в этой версии.**
+
+*Исправлено:*
+* Габариты: заменён кубический корень (volume^(1/3)) на укладку стопкой (max(L) × max(W) × Σ(H)) — реалистичный расчёт для книг и коробок
+* Округление габаритов: (int) round() вместо (int) усечения — 20.7 теперь 21, а не 20
+* total_assessed_price: отправляется в копейках, а не в рублях (по спецификации API)
+* minWeight: применяется к отправлению, а не к каждому товару
+* platform_station_id: передаётся в pricing-calculator для source (склад) и destination (ПВЗ) — без station_id API считал по общему тарифу (~411₽ вместо ~226₽)
+* Дубль API-вызова: yd_self и yd_self_after используют $GLOBALS кэш в рамках одного PHP-запроса
+* Дубль update_checkout: yd-pvz-widget.js не дублирует вызов если onSelect callback задан
+
+*Добавлено:*
+* Цена не показывается пока ПВЗ не выбран (заглушка «выберите пункт выдачи», cost=0)
+* Фильтр woocommerce_cart_shipping_method_full_label скрывает «0₽/Бесплатно» для методов без выбранного ПВЗ
+* Фильтр woocommerce_cart_shipping_packages включает yd_pvz_code в хэш пакета для инвалидации кэша WC
+* Принудительная очистка shipping_for_package_* в yd_update_callback() при смене ПВЗ
+* Сброс ПВЗ при смене города: очистка cookies и UI при смене города и при выборе из DaData
+* Debug-логирование: параметры запроса, station_id, полный ответ API
+* Версии JS скриптов обновлены для сброса браузерного кэша
 
 = 2.0.0 =
 * Полный переход на Yandex Delivery B2B API
