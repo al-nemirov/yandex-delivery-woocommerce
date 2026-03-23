@@ -50,23 +50,28 @@ form.checkout,
     box-sizing: border-box !important;
 }
 
+/* «Ваш заказ» — внутри белого блока вместе с order_review */
 #order_review_heading {
     grid-column: 2 !important;
     grid-row: 1 !important;
     margin: 0 !important;
-    padding: 0 0 10px 0 !important;
+    padding: var(--rk-checkout-pad) !important;
+    padding-bottom: 0 !important;
     font-size: clamp(1rem, 2.2vw, 1.125rem) !important;
     font-weight: 700 !important;
     border: none !important;
-    background: none !important;
+    background: var(--rk-white) !important;
+    border-radius: var(--rk-radius) var(--rk-radius) 0 0 !important;
+    box-sizing: border-box !important;
 }
 
 #order_review {
     grid-column: 2 !important;
     grid-row: 2 / 20 !important;
     background: var(--rk-white);
-    border-radius: var(--rk-radius);
+    border-radius: 0 0 var(--rk-radius) var(--rk-radius) !important;
     padding: var(--rk-checkout-pad) !important;
+    padding-top: 10px !important;
     border: none !important;
     box-shadow: none !important;
     position: sticky !important;
