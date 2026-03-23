@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.2.2
+Version: 2.2.3
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -23,6 +23,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 add_filter( 'pre_set_site_transient_update_plugins', 'yd_github_check_update' );
 add_filter( 'plugins_api', 'yd_github_plugin_info', 10, 3 );
 add_filter( 'upgrader_post_install', 'yd_github_post_install', 10, 3 );
+
+// Clear cache when WP force-checks ("Check again" on Updates page)
+if ( is_admin() && isset( $_GET['force-check'] ) ) {
+    delete_transient( 'yd_github_release' );
+}
 
 function yd_github_check_update( $transient ) {
     if ( empty( $transient->checked ) ) {
@@ -48,7 +53,7 @@ function yd_github_check_update( $transient ) {
         }
 
         $release = json_decode( wp_remote_retrieve_body( $response ), true );
-        set_transient( $cache_key, $release, 12 * HOUR_IN_SECONDS );
+        set_transient( $cache_key, $release, 6 * HOUR_IN_SECONDS );
     }
 
     if ( empty( $release['tag_name'] ) ) {
