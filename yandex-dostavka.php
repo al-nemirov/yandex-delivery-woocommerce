@@ -15,6 +15,102 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// ---------------------------------------------------------------------------
+// GitHub Auto-Updater: проверяет новые релизы на GitHub и предлагает
+// обновление прямо в админке WordPress (Плагины → Обновления).
+// Работает через GitHub Releases API — создай Release с тегом v2.2.0 и т.д.
+// ---------------------------------------------------------------------------
+add_filter( 'pre_set_site_transient_update_plugins', 'yd_github_check_update' );
+add_filter( 'plugins_api', 'yd_github_plugin_info', 10, 3 );
+
+function yd_github_check_update( $transient ) {
+    if ( empty( $transient->checked ) ) {
+        return $transient;
+    }
+
+    $plugin_slug = plugin_basename( __FILE__ ); // yandex-dostavka/yandex-dostavka.php
+    $plugin_data = get_plugin_data( __FILE__ );
+    $current_ver = $plugin_data['Version'];
+
+    // Запрашиваем последний релиз с GitHub (кэш 12 часов)
+    $cache_key = 'yd_github_release';
+    $release   = get_transient( $cache_key );
+
+    if ( false === $release ) {
+        $response = wp_remote_get( 'https://api.github.com/repos/al-nemirov/yandex-delivery-woocommerce/releases/latest', array(
+            'timeout' => 10,
+            'headers' => array( 'Accept' => 'application/vnd.github.v3+json' ),
+        ) );
+
+        if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
+            return $transient;
+        }
+
+        $release = json_decode( wp_remote_retrieve_body( $response ), true );
+        set_transient( $cache_key, $release, 12 * HOUR_IN_SECONDS );
+    }
+
+    if ( empty( $release['tag_name'] ) ) {
+        return $transient;
+    }
+
+    // tag_name: "v2.2.0" → "2.2.0"
+    $github_ver = ltrim( $release['tag_name'], 'v' );
+
+    if ( version_compare( $github_ver, $current_ver, '>' ) ) {
+        // Ищем zip-архив в assets релиза, fallback на zipball
+        $download_url = $release['zipball_url'];
+        if ( ! empty( $release['assets'] ) ) {
+            foreach ( $release['assets'] as $asset ) {
+                if ( substr( $asset['name'], -4 ) === '.zip' ) {
+                    $download_url = $asset['browser_download_url'];
+                    break;
+                }
+            }
+        }
+
+        $transient->response[ $plugin_slug ] = (object) array(
+            'slug'        => dirname( $plugin_slug ),
+            'plugin'      => $plugin_slug,
+            'new_version' => $github_ver,
+            'url'         => $release['html_url'],
+            'package'     => $download_url,
+        );
+    }
+
+    return $transient;
+}
+
+function yd_github_plugin_info( $result, $action, $args ) {
+    if ( $action !== 'plugin_information' ) {
+        return $result;
+    }
+
+    if ( ! isset( $args->slug ) || $args->slug !== 'yandex-dostavka' ) {
+        return $result;
+    }
+
+    $plugin_data = get_plugin_data( __FILE__ );
+    $release     = get_transient( 'yd_github_release' );
+
+    if ( empty( $release ) ) {
+        return $result;
+    }
+
+    return (object) array(
+        'name'          => $plugin_data['Name'],
+        'slug'          => 'yandex-dostavka',
+        'version'       => ltrim( $release['tag_name'], 'v' ),
+        'author'        => $plugin_data['Author'],
+        'homepage'      => $plugin_data['PluginURI'],
+        'download_link' => $release['zipball_url'],
+        'sections'      => array(
+            'description' => $plugin_data['Description'],
+            'changelog'   => nl2br( esc_html( $release['body'] ?? '' ) ),
+        ),
+    );
+}
+
 // Yandex Delivery API client
 require_once __DIR__ . '/includes/class-yandex-delivery-api.php';
 
