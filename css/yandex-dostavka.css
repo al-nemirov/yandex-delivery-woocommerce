@@ -74,8 +74,15 @@ form.checkout,
     box-sizing: border-box !important;
 }
 
-/* Скрываем мусор */
-.woocommerce-billing-fields > h3,
+/* Заголовок «Ваши данные» над формой — вместо скрытого h3 */
+.woocommerce-billing-fields > h3 {
+    display: block !important;
+    font-size: clamp(1rem, 2.2vw, 1.125rem) !important;
+    font-weight: 700 !important;
+    margin: 0 0 16px 0 !important;
+    padding: 0 !important;
+    color: var(--rk-dark) !important;
+}
 .woocommerce-additional-fields > h3,
 #ship-to-different-address { display: none !important; }
 .col2-set .col-1, .col2-set .col-2 { float: none !important; width: 100% !important; }
@@ -133,23 +140,50 @@ form.checkout,
 #billing_postcode_field[style*="none"],
 #billing_state_field[style*="none"] { margin: 0 !important; padding: 0 !important; height: 0 !important; overflow: hidden !important; }
 
-/* ===== ТАБЛИЦА ЗАКАЗА ===== */
-.woocommerce-checkout .shop_table,
+/* ===== ТАБЛИЦА ЗАКАЗА — колонки: название, кол-во, цена ===== */
+.woocommerce-checkout .shop_table { border: none !important; border-collapse: collapse !important; width: 100% !important; }
 .woocommerce-checkout .shop_table tbody,
-.woocommerce-checkout .shop_table tr,
+.woocommerce-checkout .shop_table tfoot { display: table-row-group !important; width: 100% !important; }
+.woocommerce-checkout .shop_table tr { display: table-row !important; }
 .woocommerce-checkout .shop_table td,
-.woocommerce-checkout .shop_table th,
-.woocommerce-checkout .shop_table tfoot { display: block !important; width: 100% !important; border: none !important; padding: 0 !important; }
-.woocommerce-checkout .cart_item {
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: flex-start !important;
-    padding: 12px 0 !important;
+.woocommerce-checkout .shop_table th {
+    display: table-cell !important;
+    border: none !important;
     border-bottom: 1px solid var(--rk-line) !important;
-    gap: 12px;
+    padding: 10px 8px !important;
+    vertical-align: top !important;
+    font-size: 14px !important;
 }
-.woocommerce-checkout .product-name { flex: 1 !important; font-size: 14px !important; font-weight: 500 !important; line-height: 1.45 !important; }
-.woocommerce-checkout .product-total { font-weight: 600 !important; white-space: nowrap !important; }
+/* Шапка таблицы — показываем, тонкая */
+.woocommerce-checkout .shop_table thead {
+    display: table-header-group !important;
+}
+.woocommerce-checkout .shop_table thead th {
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    color: #888 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    padding: 0 8px 8px !important;
+    border-bottom: 1px solid var(--rk-border) !important;
+}
+/* Название товара */
+.woocommerce-checkout .shop_table .product-name {
+    font-weight: 500 !important;
+    line-height: 1.45 !important;
+    width: 70% !important;
+}
+/* Количество — отделяем от названия визуально */
+.woocommerce-checkout .shop_table .product-name .product-quantity {
+    color: #888 !important;
+    font-weight: 400 !important;
+}
+/* Цена */
+.woocommerce-checkout .shop_table .product-total {
+    font-weight: 600 !important;
+    white-space: nowrap !important;
+    text-align: right !important;
+}
 
 /* ===== ДОСТАВКА — список, без «коробок» ===== */
 .woocommerce-checkout .cart-subtotal,
@@ -168,12 +202,11 @@ form.checkout,
     border-bottom: 1px solid var(--rk-line) !important;
     border-radius: 0 !important;
     margin-bottom: 0 !important;
-    padding: 12px 0 12px 10px !important;
-    box-shadow: inset 3px 0 0 transparent;
-    transition: box-shadow 0.15s ease;
+    padding: 12px 14px !important;
+    transition: background 0.15s ease;
 }
 .woocommerce-checkout .woocommerce-shipping-methods li:has(input:checked) {
-    box-shadow: inset 3px 0 0 var(--rk-red);
+    background: #fafafa !important;
 }
 
 /* Обёртка кнопки ПВЗ — без лишней рамки */
@@ -216,11 +249,27 @@ a.bxbbutton, a.nd-button { color: white !important; text-decoration: none !impor
     color: #166534 !important;
 }
 
+/* ===== ПОДЫТОГ / ДОСТАВКА / ИТОГО — чёткие строки ===== */
+.woocommerce-checkout .shop_table tfoot th {
+    font-weight: 500 !important;
+    color: #555 !important;
+    text-align: left !important;
+}
+.woocommerce-checkout .shop_table tfoot td {
+    text-align: right !important;
+    font-weight: 600 !important;
+}
+
 /* ===== ИТОГО ===== */
 .woocommerce-checkout .order-total {
-    border-top: 1px solid var(--rk-line) !important;
+    border-top: 2px solid var(--rk-dark) !important;
     margin-top: 4px !important;
     padding-top: 14px !important;
+}
+.woocommerce-checkout .order-total th {
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    color: var(--rk-dark) !important;
 }
 .woocommerce-checkout .order-total .amount {
     font-size: clamp(1.25rem, 3vw, 1.5rem) !important;
@@ -228,28 +277,63 @@ a.bxbbutton, a.nd-button { color: white !important; text-decoration: none !impor
     font-weight: 700 !important;
 }
 
-/* ===== ОПЛАТА — тот же минимализм, что у доставки ===== */
-.woocommerce-checkout .wc_payment_methods { list-style: none !important; padding: 0 !important; margin: 0 !important; }
-.woocommerce-checkout .wc_payment_method {
+/* Заголовок «Способ оплаты» */
+.woocommerce-checkout #payment::before {
+    content: "Способ оплаты";
+    display: block;
+    font-size: clamp(0.9rem, 2vw, 1rem);
+    font-weight: 700;
+    color: var(--rk-dark);
+    margin-bottom: 12px;
+}
+
+/* ===== ОПЛАТА — чистый список без полосок и серого фона ===== */
+.woocommerce-checkout #payment {
     background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+}
+.woocommerce-checkout .wc_payment_methods {
+    list-style: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 1px solid var(--rk-border) !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+.woocommerce-checkout .wc_payment_method {
+    background: var(--rk-white) !important;
     border: none !important;
     border-bottom: 1px solid var(--rk-line) !important;
     border-radius: 0 !important;
     margin-bottom: 0 !important;
-    padding: 12px 0 12px 10px !important;
-    box-shadow: inset 3px 0 0 transparent;
-    transition: box-shadow 0.15s ease;
+    padding: 14px 16px !important;
+    box-shadow: none !important;
+    transition: background 0.15s ease;
+}
+.woocommerce-checkout .wc_payment_method:last-child {
+    border-bottom: none !important;
 }
 .woocommerce-checkout .wc_payment_method:has(input:checked) {
-    box-shadow: inset 3px 0 0 var(--rk-red);
+    background: #fafafa !important;
+}
+.woocommerce-checkout .wc_payment_method label {
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
 }
 .woocommerce-checkout .payment_box {
-    margin-top: 8px !important;
-    padding: 10px 12px !important;
-    background: var(--rk-muted) !important;
-    border-radius: 6px !important;
+    margin-top: 10px !important;
+    padding: 12px 14px !important;
+    background: transparent !important;
+    border-radius: 0 !important;
     font-size: 13px !important;
+    color: #666 !important;
     border: none !important;
+    border-top: 1px solid var(--rk-line) !important;
 }
 
 /* ===== КНОПКА ЗАКАЗА ===== */
