@@ -188,43 +188,43 @@ form.checkout,
     text-align: right !important;
 }
 
-/* ===== TFOOT: Подытог, Доставка, Итого ===== */
+/* ===== TFOOT: всё block + ширина 100% от таблицы ===== */
 .woocommerce-checkout .shop_table tfoot {
-    display: block !important;
-    width: 100% !important;
+    display: table-footer-group !important;
 }
-/* Каждая строка tfoot — flex: th слева, td справа */
 .woocommerce-checkout .shop_table tfoot tr {
     display: flex !important;
     justify-content: space-between !important;
     align-items: baseline !important;
-    padding: 10px 0 !important;
+    padding: 10px 8px !important;
     border: none !important;
     border-bottom: 1px solid var(--rk-line) !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
 }
 .woocommerce-checkout .shop_table tfoot th,
 .woocommerce-checkout .shop_table tfoot td {
-    display: block !important;
+    display: inline !important;
     border: none !important;
     padding: 0 !important;
 }
-.woocommerce-checkout .shop_table tfoot th {
-    flex-shrink: 0 !important;
-}
 .woocommerce-checkout .shop_table tfoot td {
-    flex: 1 !important;
+    margin-left: auto !important;
     text-align: right !important;
 }
-/* Доставка: вся строка вертикальная — th сверху, td на всю ширину */
+/* Доставка: вертикальная — th сверху, td 100% ниже */
 .woocommerce-checkout .shop_table tfoot .shipping {
-    flex-direction: column !important;
-    align-items: stretch !important;
+    flex-wrap: wrap !important;
+}
+.woocommerce-checkout .shop_table tfoot .shipping th {
+    display: block !important;
+    width: 100% !important;
+    margin-bottom: 6px !important;
 }
 .woocommerce-checkout .shop_table tfoot .shipping td {
-    flex: none !important;
+    display: block !important;
     width: 100% !important;
     text-align: left !important;
-    margin-top: 6px !important;
 }
 .woocommerce-checkout .woocommerce-shipping-methods { list-style: none !important; padding: 0 !important; margin: 6px 0 0 !important; }
 .woocommerce-checkout .woocommerce-shipping-methods li {

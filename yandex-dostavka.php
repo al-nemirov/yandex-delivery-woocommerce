@@ -2360,7 +2360,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
             wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . ( 'js/yandex-dostavka.js' ), [ 'jquery', 'yd_pvz_widget' ], '2.50' );
 
-            wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), '3.7.0' );
+            wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), '3.8.0' );
 
             wp_enqueue_style( 'yd_button' );
 
