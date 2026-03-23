@@ -22,6 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // ---------------------------------------------------------------------------
 add_filter( 'pre_set_site_transient_update_plugins', 'yd_github_check_update' );
 add_filter( 'plugins_api', 'yd_github_plugin_info', 10, 3 );
+add_filter( 'upgrader_post_install', 'yd_github_post_install', 10, 3 );
 
 function yd_github_check_update( $transient ) {
     if ( empty( $transient->checked ) ) {
@@ -97,18 +98,47 @@ function yd_github_plugin_info( $result, $action, $args ) {
         return $result;
     }
 
+    $download_url = $release['zipball_url'];
+    if ( ! empty( $release['assets'] ) ) {
+        foreach ( $release['assets'] as $asset ) {
+            if ( substr( $asset['name'], -4 ) === '.zip' ) {
+                $download_url = $asset['browser_download_url'];
+                break;
+            }
+        }
+    }
+
     return (object) array(
         'name'          => $plugin_data['Name'],
         'slug'          => 'yandex-dostavka',
         'version'       => ltrim( $release['tag_name'], 'v' ),
         'author'        => $plugin_data['Author'],
         'homepage'      => $plugin_data['PluginURI'],
-        'download_link' => $release['zipball_url'],
+        'download_link' => $download_url,
         'sections'      => array(
             'description' => $plugin_data['Description'],
             'changelog'   => nl2br( esc_html( $release['body'] ?? '' ) ),
         ),
+        'requires'      => '5.0',
+        'requires_php'  => '7.2',
+        'last_updated'  => $release['published_at'] ?? '',
     );
+}
+
+/**
+ * After GitHub zip install, rename extracted folder to match plugin slug
+ * and re-activate the plugin.
+ */
+function yd_github_post_install( $response, $hook_extra, $result ) {
+    if ( ! isset( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== plugin_basename( __FILE__ ) ) {
+        return $result;
+    }
+    global $wp_filesystem;
+    $plugin_dir = WP_PLUGIN_DIR . '/' . dirname( plugin_basename( __FILE__ ) );
+    $wp_filesystem->move( $result['destination'], $plugin_dir );
+    $result['destination'] = $plugin_dir;
+    activate_plugin( plugin_basename( __FILE__ ) );
+    return $result;
 }
 
 // Yandex Delivery API client
