@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.1.2
+Version: 2.2.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -953,7 +953,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     return false;
                 }
 
-                if ( ( isset( $package['destination']['city'] ) && empty( trim( $package['destination']['city'] ) ) ) || current_action() === 'woocommerce_add_to_cart' ) {
+                // PHP 8.1 compat: cast to string before trim to avoid deprecation notice on null
+                if ( ( isset( $package['destination']['city'] ) && empty( trim( (string) $package['destination']['city'] ) ) ) || current_action() === 'woocommerce_add_to_cart' ) {
                     return false;
                 }
 
@@ -1119,25 +1120,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                     if ( ! is_wp_error( $result ) && isset( $result['pricing_total'] ) ) {
                         $costReceived = (float) $result['pricing_total'];
-                        // Debug: логируем все поля ответа
-                        error_log( '[YD] === CALC RESPONSE ===' );
-                        error_log( '[YD] pricing_total=' . ( $result['pricing_total'] ?? 'N/A' ) );
-                        if ( isset( $result['pricing'] ) ) {
-                            error_log( '[YD] pricing (base)=' . $result['pricing'] );
-                        }
-                        if ( isset( $result['pricing_commission_on_delivery_payment'] ) ) {
-                            error_log( '[YD] commission_rate=' . $result['pricing_commission_on_delivery_payment'] );
-                        }
-                        if ( isset( $result['pricing_commission_on_delivery_payment_amount'] ) ) {
-                            error_log( '[YD] commission_amount=' . $result['pricing_commission_on_delivery_payment_amount'] );
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[YD] pricing_total=' . ( $result['pricing_total'] ?? 'N/A' ) );
                         }
                     } else {
-                        // API не ответил — используем фиксированную стоимость
                         $fixedCost = (float) $this->get_option( 'fixed_cost', 350 );
                         $costReceived = $fixedCost;
+                        // Fallback всегда логируем — это ошибка, не debug
                         $apiErr = is_wp_error( $result ) ? $result->get_error_message() : 'pricing_total not found';
-                        error_log( '[YD] calculate_price fallback to fixed_cost=' . $fixedCost . '. API error: ' . $apiErr );
-                        error_log( '[YD] Full API response: ' . wp_json_encode( $result ) );
+                        error_log( '[YD] fallback to fixed_cost=' . $fixedCost . ': ' . $apiErr );
                     }
 
                     // Срок доставки
@@ -1161,7 +1152,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     }
                     $finalCost = round( $finalCost, 2 );
 
-                    error_log( '[YD] PRICING DEBUG: API pricing_total=' . $costReceived . ', addcost=' . $this->addcost . ', markup_percent=' . $markupPercent . ', finalCost=' . $finalCost );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[YD] pricing: base=' . $costReceived . ' +add=' . $this->addcost . ' +markup=' . $markupPercent . '% = ' . $finalCost );
+                    }
 
                     $this->add_rate( [
                         'id'    => $this->get_rate_id(),
@@ -1266,10 +1259,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         return (float) $product->get_weight();
     }
 
-    function bxbGetUrl()
-    {
-        return str_replace( [ 'http://', 'https://' ], '', get_site_url() );
-    }
+    // bxbGetUrl() removed — dead code, never called
 
     add_action( 'woocommerce_shipping_init', 'yd_shipping_method_init' );
 
@@ -1348,51 +1338,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
     add_action( 'woocommerce_checkout_update_order_review', 'action_woocommerce_checkout_update_order_review', 10, 1 );
 
-    function isCodAvailableForCountry( $countryCode, $paymentAfter )
-    {
-        if ( $countryCode === '643' || $countryCode === '398' ) {
-            return true;
-        }
-
-        if ( ! $paymentAfter ) {
-            return true;
-        }
-
-        return false;
-    }
-
-    function validateShippingZone( $currentShippingZoneId, $shippingMethodZones, $currentCountryCode )
-    {
-        $yd_countries = [
-            '860' => 'UZ',
-            '762' => 'TJ',
-            '643' => 'RU',
-            '417' => 'KG',
-            '398' => 'KZ',
-            '112' => 'BY',
-            '051' => 'AM',
-        ];
-
-        foreach ( $shippingMethodZones as $zone ) {
-            if ( $zone['id'] !== $currentShippingZoneId ) {
-                continue;
-            }
-
-            if ( empty( $zone['zone_locations'] ) ) {
-                return true;
-            }
-
-            foreach ( $yd_countries as $countryCode => $zoneLocationCode ) {
-                foreach ( $zone['zone_locations'] as $zoneLocation ) {
-                    if ( $zoneLocation->code === $zoneLocationCode && $currentCountryCode == $countryCode ) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
+    // isCodAvailableForCountry() removed — dead code, never called
+    // validateShippingZone() removed — dead code, never called
 
     function bxbGetLastStatusInOrder( $data )
     {
@@ -1883,23 +1830,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         return [];
     }
 
-    function yd_get_tax_rate( $product )
-    {
-        $taxStatus = $product->get_tax_status();
-
-        if ( $taxStatus !== 'none' ) {
-            $taxClass = $product->get_tax_class();
-            $taxRates = WC_Tax::get_rates( $taxClass );
-
-            if ( ! empty( $taxRates ) ) {
-                foreach ( $taxRates as $rate ) {
-                    return $rate['rate'];
-                }
-            }
-        }
-
-        return null;
-    }
+    // yd_get_tax_rate() removed — dead code, never called
 
     function yd_woocommerce_after_shipping_rate( $method )
     {
@@ -1930,83 +1861,39 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 $state = WC()->customer->get_shipping_state();
 
-                $weight       = 0;
-                $current_unit = strtolower( get_option( 'woocommerce_weight_unit' ) );
-                $weight_c     = 1;
-
-                if ( $current_unit === 'kg' ) {
-                    $weight_c = 1000;
-                }
-
-                $dimension_c    = 1;
-                $dimension_unit = strtolower( get_option( 'woocommerce_dimension_unit' ) );
-
-                switch ( $dimension_unit ) {
-                    case 'm':
-                        $dimension_c = 100;
-                        break;
-                    case 'mm':
-                        $dimension_c = 0.1;
-                        break;
-                }
-
-                $cartProducts = WC()->cart->get_cart();
-                $countProduct = count( $cartProducts );
-
-                $height                 = 0;
-                $depth                  = 0;
-                $width                  = 0;
-                $applyDefaultDimensions = (int) $shipping->get_option( 'apply_default_dimensions' );
-                $defaultWeight          = (float) $shipping->get_option( 'default_weight' );
-                $defaultHeight          = (int) $shipping->get_option( 'default_height' );
-                $defaultDepth           = (int) $shipping->get_option( 'default_depth' );
-                $defaultWidth           = (int) $shipping->get_option( 'default_width' );
-
-                if ( $applyDefaultDimensions == 2 ) {
-                    $weight = $defaultWeight;
-                    $height = $defaultHeight;
-                    $depth  = $defaultDepth;
-                    $width  = $defaultWidth;
-                } else {
-                    foreach ( $cartProducts as $cartProduct ) {
-                        $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
-                        if ( ! $product ) {
-                            continue;
-                        }
-
-                        $itemWeight = bxbGetWeight( $product, $cartProduct['variation_id'] );
-                        $itemWeight = (float) $itemWeight * $weight_c;
-
-                        if ( $countProduct == 1 && ( $cartProduct['quantity'] == 1 ) ) {
-                            $height = (float) $product->get_height() * $dimension_c;
-                            $depth  = (float) $product->get_length() * $dimension_c;
-                            $width  = (float) $product->get_width() * $dimension_c;
-
-                            if ( $applyDefaultDimensions == 1 ) {
-                                if ( $height == 0 || $depth == 0 || $width == 0 ) {
-                                    $height = $defaultHeight;
-                                    $depth  = $defaultDepth;
-                                    $width  = $defaultWidth;
-                                }
-                            }
-                        }
-
-                        $weight += ( $itemWeight > 0 ? $itemWeight : (float) $defaultWeight * $weight_c ) * $cartProduct['quantity'];
-                    }
-                }
-
-                $totalval = 0;
-
-                foreach ( WC()->cart->get_cart() as $cart_item ) {
-                    $product = $cart_item['data'];
-
-                    if ( $product->is_virtual() || $product->is_downloadable() ) {
+                // Единый расчёт через yd_calculate_package_dims() — без дублирования
+                $rateProducts = array();
+                foreach ( WC()->cart->get_cart() as $cartProduct ) {
+                    $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
+                    if ( ! $product || $product->is_virtual() || $product->is_downloadable() ) {
                         continue;
                     }
-
-                    $totalval += $cart_item['line_total'];
-                    $totalval += $cart_item['line_tax'];
+                    $rateProducts[] = array(
+                        'product'      => $product,
+                        'quantity'     => (int) $cartProduct['quantity'],
+                        'variation_id' => isset( $cartProduct['variation_id'] ) ? $cartProduct['variation_id'] : 0,
+                    );
                 }
+                $rateDims = yd_calculate_package_dims( $rateProducts, array(
+                    'default_weight'           => (float) $shipping->get_option( 'default_weight' ),
+                    'default_height'           => (int) $shipping->get_option( 'default_height' ),
+                    'default_depth'            => (int) $shipping->get_option( 'default_depth' ),
+                    'default_width'            => (int) $shipping->get_option( 'default_width' ),
+                    'apply_default_dimensions' => (int) $shipping->get_option( 'apply_default_dimensions' ),
+                ) );
+                $weight = $rateDims ? $rateDims['weight'] : 0;
+                $height = $rateDims ? $rateDims['height'] : 0;
+                $depth  = $rateDims ? $rateDims['depth'] : 0;
+                $width  = $rateDims ? $rateDims['width'] : 0;
+
+                // Сумма товаров с НДС для наложки
+                $qualifiedItems = array();
+                foreach ( WC()->cart->get_cart() as $ci ) {
+                    if ( ! $ci['data']->is_virtual() && ! $ci['data']->is_downloadable() ) {
+                        $qualifiedItems[] = $ci;
+                    }
+                }
+                $totalval = yd_assessed_price_minor_units( $qualifiedItems, 'cart' ) / 100;
 
                 $surch = $shipping->get_option( 'surch' ) !== '' ? (int) $shipping->get_option( 'surch' ) : 1;
 
@@ -2590,24 +2477,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         wp_send_json_success();
     }
 
-    function yd_is_point_yandex_by_name($pointName)
-    {
-        if (!$pointCode = getReceptionPointCodeByName($pointName)) {
-            return null;
-        }
-
-        return strlen($pointCode) >20;
-    }
-
-    function yd_is_point_yandex_by_code($pointCode)
-    {
-        return strlen($pointCode) > 20;
-    }
-
-    function yd_get_current_api_data_source()
-    {
-        return 'yandex';
-    }
+    // yd_is_point_yandex_by_name() removed — dead code
+    // yd_is_point_yandex_by_code() removed — dead code
+    // yd_get_current_api_data_source() removed — dead code (always returned 'yandex')
 
     function yd_is_reception_points_table_exist()
     {
@@ -2694,27 +2566,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         return $count == 0;
     }
 
-    function yd_is_cities_table_empty()
-    {
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'yd_cities';
-        $query = "SELECT COUNT(*) FROM $table_name";
-        $count = $wpdb->get_var($query);
-
-        return $count == 0;
-    }
-
-    /**
-     * Cities are no longer needed with Yandex Delivery API.
-     * The pricing calculator uses addresses directly.
-     * This function is kept as a no-op for backward compatibility.
-     */
-    function yd_add_cities( $token )
-    {
-        // No-op: Yandex Delivery API does not require a cities database.
-        // Address resolution is handled by the API itself.
-        return;
-    }
+    // yd_is_cities_table_empty() removed — dead code, never called
+    // yd_add_cities() removed — was no-op, never needed
 
     function yd_add_reception_points($token)
     {
@@ -3086,7 +2939,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         if ( isset( $shippingData['method_id'], $shippingData['object'] ) && strpos( $shippingData['method_id'], 'yd' ) !== false ) {
             $parselCreateStatus = $shippingData['object']->get_option( 'parselcreate_on_status' );
 
-            if ( $next_status === substr( $parselCreateStatus, 3 ) && ! $order->get_meta( 'yd_tracking_number' ) ) {
+            // Fix: guard against 'none' default — substr('none',3) === 'e' which could match accidentally
+            if ( $parselCreateStatus !== 'none' && $next_status === substr( $parselCreateStatus, 3 ) && ! $order->get_meta( 'yd_tracking_number' ) ) {
                 yd_get_tracking_code( $orderId );
             }
         }
@@ -3121,8 +2975,12 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $_POST['billing_state'] = $data['billing_city'];
             }
             if ( empty( $data['billing_country'] ) ) {
-                $data['billing_country'] = 'RU';
-                $_POST['billing_country'] = 'RU';
+                // Default country filterable for KZ, BY, etc. — was hardcoded 'RU'
+                $defaultCountry = apply_filters( 'yd_default_billing_country', get_option( 'woocommerce_default_country', 'RU' ) );
+                // WC stores country:state format, extract just country
+                $defaultCountry = strstr( $defaultCountry, ':', true ) ?: $defaultCountry;
+                $data['billing_country'] = $defaultCountry;
+                $_POST['billing_country'] = $defaultCountry;
             }
             if ( empty( $data['shipping_address_1'] ) ) {
                 $data['shipping_address_1'] = $pvz_address;

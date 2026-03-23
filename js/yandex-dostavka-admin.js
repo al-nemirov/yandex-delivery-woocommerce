@@ -190,7 +190,7 @@ function checkYdApiKeys() {
                         // DON'T disable — just show warning
                         var msg = (response.data && response.data.message) ? response.data.message : 'Ошибка проверки токена';
                         if ($d.length) {
-                            $d.html('<span style="color:#d63638;">' + msg + '</span>');
+                            $d.html('<span style="color:#d63638;"></span>').find('span').text(msg);
                         }
                         console.warn('[ND] API key check failed:', response);
                     }

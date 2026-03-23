@@ -1,7 +1,7 @@
 === Яндекс Доставка для WooCommerce ===
 Contributors: al-nemirov
 Tags: доставка, woocommerce, яндекс, shipping, delivery, pvz, курьер
-Stable tag: 2.1.0
+Stable tag: 2.2.0
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
@@ -129,6 +129,26 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 WooCommerce → МойСклад Яндекс — введите логин/пароль, UUID организации и товара по умолчанию.
 
 == Changelog ==
+
+= 2.1.3 =
+
+* Виджет ПВЗ: вес и габариты через ту же функцию, что и серверный расчёт (yd_calculate_package_dims)
+* Удалена неиспользуемая настройка check_zip из формы метода
+* Уточнено описание surch (только виджет, data-surch)
+* Логи pricing-calculator: только при WP_DEBUG, адреса в логе маскируются
+* get_delivery_methods помечен @deprecated (другой контур API)
+
+= 2.1.2 =
+
+* delivery_cost и items_list.price согласованы с НДС (как total_assessed_price)
+* Товары заказа: get_items('line_item')
+* Удалён неиспользуемый блок конвертации веса/габаритов в calculate_shipping
+
+= 2.1.1 =
+
+* Nonce ПВЗ: check_ajax_referer('yd_update', 'nonce') как у wp_data.yd_nonce
+* calculate_shipping вызывает yd_calculate_package_dims() (без дублирования стопки)
+* Исправлен лог расчёта без несуществующей переменной
 
 = 2.1.0 =
 

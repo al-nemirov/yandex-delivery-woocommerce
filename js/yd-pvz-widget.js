@@ -115,11 +115,11 @@
                         self.initMap(self.points);
                     } else {
                         var msg = (res.data && res.data.message) ? res.data.message : 'Пункты не найдены';
-                        if (listDiv) listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#d63638;">' + msg + '</div>';
+                        if (listDiv) listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#d63638;">' + self.esc(msg) + '</div>';
                     }
                 })
                 .catch(function(err) {
-                    if (listDiv) listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#d63638;">Ошибка: ' + err.message + '</div>';
+                    if (listDiv) listDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#d63638;">Ошибка: ' + self.esc(err.message) + '</div>';
                 });
         },
 
