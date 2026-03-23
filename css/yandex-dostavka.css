@@ -187,8 +187,12 @@ form.checkout,
     padding: 12px 0 !important;
     border-bottom: 1px solid var(--rk-line) !important;
 }
+.woocommerce-checkout .shop_table tbody .cart_item td {
+    width: auto !important;
+}
 .woocommerce-checkout .shop_table .product-name {
     flex: 1 !important;
+    min-width: 0 !important;
     font-weight: 500 !important;
     font-size: 14px !important;
     line-height: 1.45 !important;
@@ -198,6 +202,8 @@ form.checkout,
     font-weight: 400 !important;
 }
 .woocommerce-checkout .shop_table .product-total {
+    flex-shrink: 0 !important;
+    width: auto !important;
     font-weight: 600 !important;
     font-size: 14px !important;
     white-space: nowrap !important;
