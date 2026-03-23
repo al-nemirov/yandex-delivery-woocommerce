@@ -667,16 +667,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                             2 => 'Ко всему отправлению целиком',
                         ],
                     ),
-                    'check_zip'                           => array(
-                        'title'    => 'Учитывать индекс покупателя',
-                        'desc_tip' => 'Использовать почтовый индекс покупателя для расчёта стоимости',
-                        'type'     => 'select',
-                        'class'    => 'wc-enhanced-select',
-                        'options'  => [
-                            0 => 'Нет',
-                            1 => 'Да'
-                        ]
-                    ),
+                    // check_zip removed: option was registered but never read in PHP calculation logic
                     'addcost'                             => array(
                         'title'       => 'Наценка фиксированная (₽)',
                         'description' => 'Сумма в рублях, которая прибавляется к цене из API Яндекса. 0 = без наценки.',
@@ -699,8 +690,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'default'     => '350',
                     ),
                     'surch'                               => array(
-                        'title'    => 'Наценка на расчёт',
-                        'desc_tip' => 'Отключить настройки расчёта для данного вида доставки',
+                        'title'    => 'Виджет: показывать стоимость',
+                        'desc_tip' => 'Управляет отображением стоимости в виджете ПВЗ (data-surch). На серверный расчёт не влияет.',
                         'type'     => 'select',
                         'class'    => 'wc-enhanced-select',
                         'options'  => [
@@ -1098,13 +1089,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     ) ) );
 
                     if ( ! isset( $GLOBALS['yd_pricing_cache'][ $cacheKey ] ) ) {
-                        // Debug: логируем все параметры запроса
-                        error_log( '[YD] === CALC REQUEST (' . $this->id . ') ===' );
-                        error_log( '[YD] source=' . $sourceAddress . ' (station_id=' . ( $sourceStationId ?: 'N/A' ) . ')' );
-                        error_log( '[YD] dest=' . $destinationAddress . ' (station_id=' . ( $destinationStationId ?: 'N/A' ) . ')' );
-                        error_log( '[YD] tariff=' . $tariff . ', weight=' . (int) $fullPackage['weight'] . 'g' );
-                        error_log( '[YD] dimensions: L=' . $dimensions['length'] . ' W=' . $dimensions['width'] . ' H=' . $dimensions['height'] . ' cm' );
-                        error_log( '[YD] assessed_price=' . $assessedPrice . ' kopecks (' . round( $assessedPrice / 100, 2 ) . ' RUB)' );
+                        // Debug (only with WP_DEBUG, addresses masked for PII)
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[YD] === CALC REQUEST (' . $this->id . ') ===' );
+                            error_log( '[YD] source_station=' . ( $sourceStationId ?: 'N/A' ) );
+                            error_log( '[YD] dest_station=' . ( $destinationStationId ?: 'N/A' ) );
+                            error_log( '[YD] tariff=' . $tariff . ', weight=' . (int) $fullPackage['weight'] . 'g' );
+                            error_log( '[YD] dims: L=' . $dimensions['length'] . ' W=' . $dimensions['width'] . ' H=' . $dimensions['height'] . ' cm' );
+                            error_log( '[YD] assessed_price=' . $assessedPrice . ' kopecks (' . round( $assessedPrice / 100, 2 ) . ' RUB)' );
+                        }
 
                         $GLOBALS['yd_pricing_cache'][ $cacheKey ] = $yd_client->calculate_price(
                             $sourceAddress,
@@ -1116,7 +1109,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                             $sourceStationId,
                             $destinationStationId
                         );
-                    } else {
+                    } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[YD] === CALC CACHED (' . $this->id . ') === reusing result from previous method' );
                     }
 
@@ -2122,70 +2115,31 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 $city = str_replace(['Ё', 'Г ', 'АЛМАТЫ'], ['Е', '', 'АЛМА-АТА'], mb_strtoupper($city));
 
-                $weight = 0;
-                $current_unit = strtolower(get_option('woocommerce_weight_unit'));
-                $weight_c = 1;
-
-                if ($current_unit === 'kg') {
-                    $weight_c = 1000;
-                }
-
-                $dimension_c = 1;
-                $dimension_unit = strtolower(get_option('woocommerce_dimension_unit'));
-
-                switch ($dimension_unit) {
-                    case 'm':
-                        $dimension_c = 100;
-                        break;
-                    case 'mm':
-                        $dimension_c = 0.1;
-                        break;
-                }
-
+                // Единый расчёт веса/габаритов через yd_calculate_package_dims() (§3.2 backlog)
                 $cartProducts = WC()->cart->get_cart();
-                $countProduct = count($cartProducts);
-
-                $height                 = 0;
-                $depth                  = 0;
-                $width                  = 0;
-                $applyDefaultDimensions = (int) $shipping_method->get_option( 'apply_default_dimensions' );
-                $defaultWeight          = (float) $shipping_method->get_option( 'default_weight' );
-                $defaultHeight          = (int) $shipping_method->get_option( 'default_height' );
-                $defaultDepth           = (int) $shipping_method->get_option( 'default_depth' );
-                $defaultWidth           = (int) $shipping_method->get_option( 'default_width' );
-
-                if ( $applyDefaultDimensions == 2 ) {
-                    $weight = $defaultWeight;
-                    $height = $defaultHeight;
-                    $depth  = $defaultDepth;
-                    $width  = $defaultWidth;
-                } else {
-                    foreach ( $cartProducts as $cartProduct ) {
-                        $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
-                        if ( ! $product ) {
-                            continue;
-                        }
-
-                        $itemWeight = bxbGetWeight( $product, $cartProduct['variation_id'] );
-                        $itemWeight = (float) $itemWeight * $weight_c;
-
-                        if ( $countProduct == 1 && ( $cartProduct['quantity'] == 1 ) ) {
-                            $height = (float) $product->get_height() * $dimension_c;
-                            $depth  = (float) $product->get_length() * $dimension_c;
-                            $width  = (float) $product->get_width() * $dimension_c;
-
-                            if ( $applyDefaultDimensions == 1 ) {
-                                if ( $height == 0 || $depth == 0 || $width == 0 ) {
-                                    $height = $defaultHeight;
-                                    $depth  = $defaultDepth;
-                                    $width  = $defaultWidth;
-                                }
-                            }
-                        }
-
-                        $weight += ( $itemWeight > 0 ? $itemWeight : (float) $defaultWeight * $weight_c ) * $cartProduct['quantity'];
+                $widgetProducts = array();
+                foreach ( $cartProducts as $cartProduct ) {
+                    $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
+                    if ( ! $product || $product->is_virtual() || $product->is_downloadable() ) {
+                        continue;
                     }
+                    $widgetProducts[] = array(
+                        'product'      => $product,
+                        'quantity'     => (int) $cartProduct['quantity'],
+                        'variation_id' => isset( $cartProduct['variation_id'] ) ? $cartProduct['variation_id'] : 0,
+                    );
                 }
+                $widgetDims = yd_calculate_package_dims( $widgetProducts, array(
+                    'default_weight'           => (float) $shipping_method->get_option( 'default_weight' ),
+                    'default_height'           => (int) $shipping_method->get_option( 'default_height' ),
+                    'default_depth'            => (int) $shipping_method->get_option( 'default_depth' ),
+                    'default_width'            => (int) $shipping_method->get_option( 'default_width' ),
+                    'apply_default_dimensions' => (int) $shipping_method->get_option( 'apply_default_dimensions' ),
+                ) );
+                $weight = $widgetDims ? $widgetDims['weight'] : 0;
+                $height = $widgetDims ? $widgetDims['height'] : 0;
+                $depth  = $widgetDims ? $widgetDims['depth'] : 0;
+                $width  = $widgetDims ? $widgetDims['width'] : 0;
 
                 $totalval = WC()->cart->get_cart_contents_total() + WC()->cart->get_total_tax();
 

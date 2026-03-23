@@ -153,11 +153,21 @@ class Yandex_Delivery_API {
             ),
         );
 
-        error_log( '[YD API] pricing-calculator REQUEST: ' . wp_json_encode( $body ) );
+        // Log request/response only when WP_DEBUG is on; mask addresses to protect PII in prod
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $logBody = $body;
+            if ( isset( $logBody['source']['address'] ) ) {
+                $logBody['source']['address'] = '***';
+            }
+            if ( isset( $logBody['destination']['address'] ) ) {
+                $logBody['destination']['address'] = '***';
+            }
+            error_log( '[YD API] pricing-calculator REQUEST: ' . wp_json_encode( $logBody ) );
+        }
 
         $result = $this->post( '/api/b2b/platform/pricing-calculator', $body );
 
-        if ( ! is_wp_error( $result ) ) {
+        if ( ! is_wp_error( $result ) && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( '[YD API] pricing-calculator RESPONSE: ' . wp_json_encode( $result ) );
         }
 
@@ -268,6 +278,10 @@ class Yandex_Delivery_API {
      * @param float $lat  Latitude
      * @param float $lon  Longitude
      * @return array|WP_Error
+     */
+    /**
+     * @deprecated Uses /b2b/cargo/integration/v1/ (logistics API), not /b2b/platform/ (delivery API).
+     *             Verify endpoint compatibility before use. May require different contract.
      */
     public function get_delivery_methods( $lat, $lon ) {
         return $this->post( '/b2b/cargo/integration/v1/delivery-methods', array(
