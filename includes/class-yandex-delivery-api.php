@@ -83,11 +83,17 @@ class Yandex_Delivery_API {
         $status = wp_remote_retrieve_response_code( $response );
         $data   = json_decode( wp_remote_retrieve_body( $response ), true );
 
-        if ( $status !== 200 ) {
+        // P2 Fix: принимаем 200, 201, 204 как успешные ответы
+        if ( $status < 200 || $status >= 300 ) {
             $msg = isset( $data['message'] ) ? $data['message'] : 'HTTP ' . $status;
             $this->last_error = $msg;
             error_log( '[YD API] Error ' . $status . ': ' . $msg );
             return new WP_Error( 'yd_api_error', $msg, array( 'status' => $status ) );
+        }
+
+        // 204 No Content — возвращаем пустой массив
+        if ( $status === 204 || $data === null ) {
+            return array();
         }
 
         return $data;
