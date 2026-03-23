@@ -1,7 +1,7 @@
 === Яндекс Доставка для WooCommerce ===
 Contributors: al-nemirov
 Tags: доставка, woocommerce, яндекс, shipping, delivery, pvz, курьер
-Stable tag: 2.2.0
+Stable tag: 2.2.1
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
@@ -24,6 +24,7 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 = Расчёт стоимости =
 
 * Динамический расчёт через API Яндекс Доставки (вес, габариты, маршрут)
+* Единая формула расчёта для корзины и заявки (yd_assessed_price_minor_units + yd_calculate_package_dims)
 * Передача platform_station_id для склада и ПВЗ — корректный расчёт по тарифу договора
 * Фиксированная наценка в рублях поверх цены API
 * Процентная наценка поверх цены API
@@ -76,6 +77,12 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 * Создание контрагентов и заказов покупателей
 * Настройка организации и товара по умолчанию
 
+= Автообновление =
+
+* Плагин автоматически проверяет новые версии на GitHub каждые 12 часов
+* Обновление через стандартный механизм WordPress (Плагины → Обновления)
+* Не требует сторонних плагинов
+
 = Администрирование =
 
 * Метабокс в карточке заказа: трекинг, ярлыки, акты, ошибки
@@ -83,6 +90,7 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 * Проверка валидности API-токена
 * Тестовый режим (скрывает методы доставки, не затрагивает боевые заказы)
 * Совместимость с HPOS (High-Performance Order Storage)
+* Совместимость с PHP 8.1+
 
 = Чекаут =
 
@@ -93,12 +101,20 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 = Вес и габариты =
 
+* Единая функция расчёта yd_calculate_package_dims() — и для корзины, и для заявки
 * Автоматический расчёт из свойств товаров WooCommerce
-* Конвертация единиц (кг/г, см/м/мм)
-* Укладка стопкой: max(длина) × max(ширина) × сумма(высот) — реалистичный расчёт для книг и коробок
-* Корректное округление: (int) round() вместо усечения
+* Конвертация единиц (кг/г, см/м/мм) через yd_unit_coefficients()
+* Укладка стопкой: max(длина) × max(ширина) × сумма(высот)
 * Габариты по умолчанию: к каждому товару или ко всему отправлению
 * minWeight применяется к отправлению, а не к каждому товару
+
+= Безопасность =
+
+* Nonce-проверка на всех AJAX-обработчиках
+* Capability-проверки на админских эндпоинтах
+* XSS-экранирование в виджете ПВЗ и админ-панели
+* Логирование API только при WP_DEBUG, адреса маскируются для защиты ПДн
+* Страна по умолчанию из настроек WooCommerce (фильтр yd_default_billing_country)
 
 == Installation ==
 
@@ -109,6 +125,8 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 5. Введите OAuth-токен из личного кабинета Яндекс Доставки
 6. Выберите пункт приёма заказов (начните вводить город)
 7. Настройте наценки и автоматическую отправку
+
+Обновления приходят автоматически через GitHub Releases.
 
 == Frequently Asked Questions ==
 
@@ -122,55 +140,73 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 = Как работает наложенный платёж? =
 
-Добавьте метод «Яндекс Доставка — ПВЗ (наложенный платёж)». Клиент оплачивает при получении. Сумма = товары + доставка.
+Добавьте метод «Яндекс Доставка — ПВЗ (наложенный платёж)». Клиент оплачивает при получении. Сумма = товары с НДС + доставка с НДС.
 
 = Как настроить МойСклад? =
 
 WooCommerce → МойСклад Яндекс — введите логин/пароль, UUID организации и товара по умолчанию.
 
+= Как работает автообновление? =
+
+Плагин проверяет GitHub Releases каждые 12 часов. Если есть новый тег (например v2.3.0), WordPress покажет обновление в стандартном интерфейсе. Для публикации: `gh release create v2.3.0 --title "v2.3.0" --notes "описание"`.
+
 == Changelog ==
+
+= 2.2.1 =
+
+* Автообновление через GitHub Releases — обновления приходят в WordPress без сторонних плагинов
+* Проверка каждые 12 часов, стандартный UI обновлений WordPress
+
+= 2.2.0 =
+
+* Все error_log при расчёте доставки под WP_DEBUG (убрано бесконтрольное логирование в прод)
+* yd_woocommerce_after_shipping_rate: заменён дублированный расчёт габаритов на yd_calculate_package_dims()
+* Удалено 10 мёртвых функций (~120 строк): bxbGetUrl, isCodAvailableForCountry, validateShippingZone, yd_get_tax_rate и др.
+* Страна по умолчанию из WooCommerce вместо захардкоженного 'RU' (фильтр yd_default_billing_country)
+* XSS-фикс: .html(msg) → .text(msg) в админ-JS, self.esc() в виджете ПВЗ
+* PHP 8.1: trim() на null больше не вызывает deprecation notice
+* substr('none',3) больше не может случайно совпасть со статусом заказа
+* Версии синхронизированы: plugin header, readme.txt, package.json
 
 = 2.1.3 =
 
-* Виджет ПВЗ: вес и габариты через ту же функцию, что и серверный расчёт (yd_calculate_package_dims)
-* Удалена неиспользуемая настройка check_zip из формы метода
+* Виджет ПВЗ: вес и габариты через yd_calculate_package_dims (единый расчёт)
+* Удалена неиспользуемая настройка check_zip
 * Уточнено описание surch (только виджет, data-surch)
-* Логи pricing-calculator: только при WP_DEBUG, адреса в логе маскируются
-* get_delivery_methods помечен @deprecated (другой контур API)
+* Логи pricing-calculator: только при WP_DEBUG, адреса маскируются
+* get_delivery_methods помечен @deprecated
 
 = 2.1.2 =
 
 * delivery_cost и items_list.price согласованы с НДС (как total_assessed_price)
-* Товары заказа: get_items('line_item')
-* Удалён неиспользуемый блок конвертации веса/габаритов в calculate_shipping
+* Товары заказа: get_items('line_item') для исключения fee/shipping/coupon
+* Удалён неиспользуемый блок конвертации единиц в calculate_shipping
 
 = 2.1.1 =
 
-* Nonce ПВЗ: check_ajax_referer('yd_update', 'nonce') как у wp_data.yd_nonce
-* calculate_shipping вызывает yd_calculate_package_dims() (без дублирования стопки)
-* Исправлен лог расчёта без несуществующей переменной
+* Nonce ПВЗ: check_ajax_referer('yd_update', 'nonce') согласован с клиентом
+* calculate_shipping вызывает yd_calculate_package_dims() без дублирования
+* Исправлен лог с несуществующей переменной $orderSum
 
 = 2.1.0 =
 
-**Внимание: отработан и протестирован только тариф self_pickup (ПВЗ). Курьерская доставка (time_interval) не тестировалась в этой версии.**
-
 *Исправлено:*
-* Габариты: заменён кубический корень (volume^(1/3)) на укладку стопкой (max(L) × max(W) × Σ(H)) — реалистичный расчёт для книг и коробок
-* Округление габаритов: (int) round() вместо (int) усечения — 20.7 теперь 21, а не 20
-* total_assessed_price: отправляется в копейках, а не в рублях (по спецификации API)
-* minWeight: применяется к отправлению, а не к каждому товару
-* platform_station_id: передаётся в pricing-calculator для source (склад) и destination (ПВЗ) — без station_id API считал по общему тарифу (~411₽ вместо ~226₽)
-* Дубль API-вызова: yd_self и yd_self_after используют $GLOBALS кэш в рамках одного PHP-запроса
-* Дубль update_checkout: yd-pvz-widget.js не дублирует вызов если onSelect callback задан
+* Единая формула оценочной стоимости: yd_assessed_price_minor_units() — копейки, с НДС, и в корзине, и в заказе
+* Единая функция габаритов: yd_calculate_package_dims() — стопка, и в корзине, и в заказе
+* Заменён кубический корень (volume^(1/3)) на укладку стопкой (max(L) × max(W) × sum(H))
+* total_assessed_price: копейки вместо рублей
+* declaredCost: включает get_total_tax() (ранее без НДС)
+* platform_station_id: передаётся в pricing-calculator для source и destination
+* Дубль API-вызова: yd_self и yd_self_after используют кэш
+* Опечатка wiidget_url исправлена на widget_url
+* API-клиент: HTTP 200-299 вместо только 200
+* Предупреждение если platform_station_id не найден
+* Предупреждение при весе вне min/max диапазона
 
 *Добавлено:*
-* Цена не показывается пока ПВЗ не выбран (заглушка «выберите пункт выдачи», cost=0)
-* Фильтр woocommerce_cart_shipping_method_full_label скрывает «0₽/Бесплатно» для методов без выбранного ПВЗ
-* Фильтр woocommerce_cart_shipping_packages включает yd_pvz_code в хэш пакета для инвалидации кэша WC
-* Принудительная очистка shipping_for_package_* в yd_update_callback() при смене ПВЗ
-* Сброс ПВЗ при смене города: очистка cookies и UI при смене города и при выборе из DaData
-* Debug-логирование: параметры запроса, station_id, полный ответ API
-* Версии JS скриптов обновлены для сброса браузерного кэша
+* Общие функции: yd_assessed_price_minor_units(), yd_unit_coefficients(), yd_calculate_package_dims()
+* Заглушка «выберите пункт выдачи» при cost=0
+* Nonce для yd_get_pvz_points
 
 = 2.0.0 =
 * Полный переход на Yandex Delivery B2B API
@@ -181,7 +217,6 @@ WooCommerce → МойСклад Яндекс — введите логин/па
 * Поддержка блочного чекаута WooCommerce
 * Совместимость с HPOS
 * Автоматическая миграция настроек с предыдущих версий
-* Улучшенная обработка ошибок и диагностика
 
 = 1.0 =
 * Первый релиз
