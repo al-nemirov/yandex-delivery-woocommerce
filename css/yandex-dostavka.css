@@ -140,13 +140,12 @@ form.checkout,
 #billing_postcode_field[style*="none"],
 #billing_state_field[style*="none"] { margin: 0 !important; padding: 0 !important; height: 0 !important; overflow: hidden !important; }
 
-/* ===== ТАБЛИЦА ЗАКАЗА — колонки: название, кол-во, цена ===== */
+/* ===== ТАБЛИЦА ЗАКАЗА — thead+tbody как таблица, tfoot как block ===== */
 .woocommerce-checkout .shop_table { border: none !important; border-collapse: collapse !important; width: 100% !important; }
-.woocommerce-checkout .shop_table tbody,
-.woocommerce-checkout .shop_table tfoot { display: table-row-group !important; width: 100% !important; }
-.woocommerce-checkout .shop_table tr { display: table-row !important; }
-.woocommerce-checkout .shop_table td,
-.woocommerce-checkout .shop_table th {
+.woocommerce-checkout .shop_table tbody { display: table-row-group !important; width: 100% !important; }
+.woocommerce-checkout .shop_table tbody tr { display: table-row !important; }
+.woocommerce-checkout .shop_table tbody td,
+.woocommerce-checkout .shop_table thead th {
     display: table-cell !important;
     border: none !important;
     border-bottom: 1px solid var(--rk-line) !important;
@@ -154,7 +153,7 @@ form.checkout,
     vertical-align: top !important;
     font-size: 14px !important;
 }
-/* Шапка таблицы — показываем, тонкая */
+/* Шапка таблицы */
 .woocommerce-checkout .shop_table thead {
     display: table-header-group !important;
 }
@@ -173,7 +172,6 @@ form.checkout,
     line-height: 1.45 !important;
     width: 70% !important;
 }
-/* Количество — отделяем от названия визуально */
 .woocommerce-checkout .shop_table .product-name .product-quantity {
     color: #888 !important;
     font-weight: 400 !important;
@@ -185,16 +183,30 @@ form.checkout,
     text-align: right !important;
 }
 
-/* ===== ДОСТАВКА — список, без «коробок» ===== */
-.woocommerce-checkout .cart-subtotal,
-.woocommerce-checkout .shipping,
-.woocommerce-checkout .order-total {
+/* ===== TFOOT: Подытог, Доставка, Итого — block layout (не table) ===== */
+.woocommerce-checkout .shop_table tfoot,
+.woocommerce-checkout .shop_table tfoot tr,
+.woocommerce-checkout .shop_table tfoot th,
+.woocommerce-checkout .shop_table tfoot td {
+    display: block !important;
+    width: 100% !important;
+    border: none !important;
+    padding: 0 !important;
+}
+/* Подытог / Доставка — строки flex */
+.woocommerce-checkout .shop_table tfoot .cart-subtotal,
+.woocommerce-checkout .shop_table tfoot .shipping {
     display: flex !important;
     justify-content: space-between !important;
     align-items: baseline !important;
-    padding: 12px 0 !important;
+    padding: 10px 0 !important;
+    border-bottom: 1px solid var(--rk-line) !important;
 }
-.woocommerce-checkout .shipping { flex-direction: column !important; align-items: stretch !important; }
+/* Доставка — вертикальный блок (название метода + кнопка ПВЗ) */
+.woocommerce-checkout .shop_table tfoot .shipping {
+    flex-direction: column !important;
+    align-items: stretch !important;
+}
 .woocommerce-checkout .woocommerce-shipping-methods { list-style: none !important; padding: 0 !important; margin: 6px 0 0 !important; }
 .woocommerce-checkout .woocommerce-shipping-methods li {
     background: transparent !important;
@@ -202,11 +214,14 @@ form.checkout,
     border-bottom: 1px solid var(--rk-line) !important;
     border-radius: 0 !important;
     margin-bottom: 0 !important;
-    padding: 12px 14px !important;
+    padding: 12px 0 !important;
     transition: background 0.15s ease;
 }
 .woocommerce-checkout .woocommerce-shipping-methods li:has(input:checked) {
     background: #fafafa !important;
+    padding: 12px 8px !important;
+    border-radius: 6px !important;
+    margin: 2px 0 !important;
 }
 
 /* Обёртка кнопки ПВЗ — без лишней рамки */

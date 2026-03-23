@@ -2360,7 +2360,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
             wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . ( 'js/yandex-dostavka.js' ), [ 'jquery', 'yd_pvz_widget' ], '2.50' );
 
-            wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), '3.2.0' );
+            wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), '3.3.0' );
 
             wp_enqueue_style( 'yd_button' );
 
@@ -3214,9 +3214,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     add_filter( 'woocommerce_checkout_fields', 'yd_customize_checkout_fields', 20 );
     add_filter( 'woocommerce_checkout_fields', 'yd_phone_always_required', 25 );
 
-    // Заголовок формы: «Ваши данные» вместо «Billing details»
+    // Заголовок формы: «Ваши данные» — ловим и английский оригинал, и русский перевод
     add_filter( 'gettext', function( $translated, $text, $domain ) {
-        if ( $domain === 'woocommerce' && $text === 'Billing details' ) {
+        if ( $domain === 'woocommerce' && ( $text === 'Billing details' || $translated === 'Оплата и доставка' ) ) {
             return 'Ваши данные';
         }
         return $translated;
