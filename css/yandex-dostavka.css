@@ -215,13 +215,16 @@ form.checkout,
     flex: 1 !important;
     text-align: right !important;
 }
-/* Доставка: td занимает всю ширину под th */
+/* Доставка: вся строка вертикальная — th сверху, td на всю ширину */
 .woocommerce-checkout .shop_table tfoot .shipping {
-    flex-wrap: wrap !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
 }
 .woocommerce-checkout .shop_table tfoot .shipping td {
-    flex-basis: 100% !important;
+    flex: none !important;
+    width: 100% !important;
     text-align: left !important;
+    margin-top: 6px !important;
 }
 .woocommerce-checkout .woocommerce-shipping-methods { list-style: none !important; padding: 0 !important; margin: 6px 0 0 !important; }
 .woocommerce-checkout .woocommerce-shipping-methods li {
@@ -240,7 +243,10 @@ form.checkout,
     margin: 2px 0 !important;
 }
 
-/* Обёртка кнопки ПВЗ — без лишней рамки */
+/* Обёртка кнопки ПВЗ — убираем inline margin от <p> */
+.woocommerce-checkout .woocommerce-shipping-methods p {
+    margin: 4px 0 8px 0 !important;
+}
 .woocommerce-checkout .woocommerce-shipping-methods .bxbbutton-wrap,
 .woocommerce-checkout .shipping td .bxbbutton { margin-top: 8px; }
 
