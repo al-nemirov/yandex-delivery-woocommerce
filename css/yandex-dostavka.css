@@ -50,33 +50,33 @@ form.checkout,
     box-sizing: border-box !important;
 }
 
-/* «Ваш заказ» — внутри белого блока вместе с order_review */
+/* «Ваш заказ» — заголовок внутри #order_review визуально через margin, без gap */
 #order_review_heading {
     grid-column: 2 !important;
     grid-row: 1 !important;
-    margin: 0 !important;
-    padding: var(--rk-checkout-pad) !important;
-    padding-bottom: 0 !important;
-    font-size: clamp(1rem, 2.2vw, 1.125rem) !important;
-    font-weight: 700 !important;
-    border: none !important;
-    background: var(--rk-white) !important;
-    border-radius: var(--rk-radius) var(--rk-radius) 0 0 !important;
-    box-sizing: border-box !important;
+    display: none !important; /* Скрываем отдельный элемент — рисуем через ::before внутри order_review */
 }
 
 #order_review {
     grid-column: 2 !important;
-    grid-row: 2 / 20 !important;
+    grid-row: 1 / 20 !important;
     background: var(--rk-white);
-    border-radius: 0 0 var(--rk-radius) var(--rk-radius) !important;
+    border-radius: var(--rk-radius) !important;
     padding: var(--rk-checkout-pad) !important;
-    padding-top: 10px !important;
     border: none !important;
     box-shadow: none !important;
     position: sticky !important;
     top: clamp(8px, 2vw, 20px);
     box-sizing: border-box !important;
+}
+/* Заголовок «Ваш заказ» через ::before — всегда внутри белого блока */
+#order_review::before {
+    content: "Ваш заказ";
+    display: block;
+    font-size: clamp(1rem, 2.2vw, 1.125rem);
+    font-weight: 700;
+    color: var(--rk-dark);
+    margin-bottom: 14px;
 }
 
 /* Заголовок «Ваши данные» над формой — вместо скрытого h3 */
@@ -188,29 +188,40 @@ form.checkout,
     text-align: right !important;
 }
 
-/* ===== TFOOT: Подытог, Доставка, Итого — block layout (не table) ===== */
-.woocommerce-checkout .shop_table tfoot,
-.woocommerce-checkout .shop_table tfoot tr,
-.woocommerce-checkout .shop_table tfoot th,
-.woocommerce-checkout .shop_table tfoot td {
+/* ===== TFOOT: Подытог, Доставка, Итого ===== */
+.woocommerce-checkout .shop_table tfoot {
     display: block !important;
     width: 100% !important;
-    border: none !important;
-    padding: 0 !important;
 }
-/* Подытог / Доставка — строки flex */
-.woocommerce-checkout .shop_table tfoot .cart-subtotal,
-.woocommerce-checkout .shop_table tfoot .shipping {
+/* Каждая строка tfoot — flex: th слева, td справа */
+.woocommerce-checkout .shop_table tfoot tr {
     display: flex !important;
     justify-content: space-between !important;
     align-items: baseline !important;
     padding: 10px 0 !important;
+    border: none !important;
     border-bottom: 1px solid var(--rk-line) !important;
 }
-/* Доставка — вертикальный блок (название метода + кнопка ПВЗ) */
+.woocommerce-checkout .shop_table tfoot th,
+.woocommerce-checkout .shop_table tfoot td {
+    display: block !important;
+    border: none !important;
+    padding: 0 !important;
+}
+.woocommerce-checkout .shop_table tfoot th {
+    flex-shrink: 0 !important;
+}
+.woocommerce-checkout .shop_table tfoot td {
+    flex: 1 !important;
+    text-align: right !important;
+}
+/* Доставка: td занимает всю ширину под th */
 .woocommerce-checkout .shop_table tfoot .shipping {
-    flex-direction: column !important;
-    align-items: stretch !important;
+    flex-wrap: wrap !important;
+}
+.woocommerce-checkout .shop_table tfoot .shipping td {
+    flex-basis: 100% !important;
+    text-align: left !important;
 }
 .woocommerce-checkout .woocommerce-shipping-methods { list-style: none !important; padding: 0 !important; margin: 6px 0 0 !important; }
 .woocommerce-checkout .woocommerce-shipping-methods li {
@@ -269,44 +280,34 @@ a.bxbbutton, a.nd-button { color: white !important; text-decoration: none !impor
     color: #166534 !important;
 }
 
-/* ===== ПОДЫТОГ / ДОСТАВКА / ИТОГО — чёткие строки ===== */
-.woocommerce-checkout .shop_table tfoot .cart-subtotal {
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: baseline !important;
-}
-.woocommerce-checkout .shop_table tfoot th {
+/* ===== Стили для строк tfoot ===== */
+.woocommerce-checkout .shop_table tfoot .cart-subtotal th,
+.woocommerce-checkout .shop_table tfoot .shipping th {
     font-weight: 500 !important;
     font-size: 14px !important;
     color: #555 !important;
-    text-align: left !important;
 }
-.woocommerce-checkout .shop_table tfoot td {
-    text-align: right !important;
+.woocommerce-checkout .shop_table tfoot .cart-subtotal td {
     font-weight: 600 !important;
     font-size: 14px !important;
 }
 
-/* ===== ИТОГО — одна строка: «Итого  3 483 ₽» ===== */
+/* ===== ИТОГО ===== */
 .woocommerce-checkout .shop_table tfoot .order-total {
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: baseline !important;
+    border-bottom: none !important;
     border-top: 2px solid var(--rk-dark) !important;
-    margin-top: 4px !important;
     padding: 14px 0 4px !important;
 }
-.woocommerce-checkout .order-total th {
+.woocommerce-checkout .shop_table tfoot .order-total th {
     font-size: 15px !important;
     font-weight: 700 !important;
     color: var(--rk-dark) !important;
 }
-.woocommerce-checkout .order-total td,
-.woocommerce-checkout .order-total .amount {
+.woocommerce-checkout .shop_table tfoot .order-total td,
+.woocommerce-checkout .shop_table tfoot .order-total .amount {
     font-size: clamp(1.1rem, 2.5vw, 1.3rem) !important;
     color: var(--rk-red) !important;
     font-weight: 700 !important;
-    text-align: right !important;
 }
 
 /* Заголовок «Способ оплаты» */
