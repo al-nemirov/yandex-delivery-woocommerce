@@ -995,71 +995,32 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $maxHeight              = (int) $this->get_option( 'height' );
                 $maxDepth               = (int) $this->get_option( 'depth' );
                 $maxWidth               = (int) $this->get_option( 'width' );
-                $fullPackage['weight']  = 0;
-                $fullPackage['depth']   = 0;
-                $fullPackage['height']  = 0;
-                $fullPackage['width']   = 0;
-
-                // Если applyDefaultDimensions = 2, вес и габариты заданные по умолчанию применяются ко всему отправлению
-                if ( $applyDefaultDimensions === 2 ) {
-                    $fullPackage['weight'] = ceil( $defaultWeight );
-                    $fullPackage['height'] = $defaultHeight;
-                    $fullPackage['depth']  = $defaultDepth;
-                    $fullPackage['width']  = $defaultWidth;
-                } else {
-                    // Габариты: max(длина) × max(ширина) × сумма(высота) — укладка стопкой
-                    $stackMaxDepth  = 0;
-                    $stackMaxWidth  = 0;
-                    $stackSumHeight = 0;
-
-                    foreach ( $package['contents'] as $cartProduct ) {
-                        $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
-
-                        if ( ! $product || $product->is_virtual() || $product->is_downloadable() ) {
-                            continue;
-                        }
-
-                        $itemWeight = ( bxbGetWeight( $product, $cartProduct['variation_id'] ) ) * $weightC;
-                        $itemHeight = (int) round( (float) $product->get_height() * $dimensionC );
-                        $itemDepth  = (int) round( (float) $product->get_length() * $dimensionC );
-                        $itemWidth  = (int) round( (float) $product->get_width() * $dimensionC );
-
-                        // Если applyDefaultDimensions = 1 и габариты у товара не заполнены, используем значения по умолчанию для этого товара
-                        if ( $applyDefaultDimensions === 1 ) {
-                            if ( $itemHeight === 0 || $itemDepth === 0 || $itemWidth === 0 ) {
-                                $itemHeight = $defaultHeight;
-                                $itemDepth  = $defaultDepth;
-                                $itemWidth  = $defaultWidth;
-                            }
-                        }
-
-                        $sumDimensions = $itemHeight + $itemDepth + $itemWidth;
-
-                        if ( $sumDimensions > 250 ) {
-                            return false;
-                        }
-
-                        $effectiveWeight = ( $itemWeight <= 0 ) ? ceil( $defaultWeight ) : ceil( $itemWeight );
-                        $fullPackage['weight'] += $cartProduct['quantity'] * $effectiveWeight;
-
-                        // Укладка стопкой: длина и ширина = макс. из товаров, высота складывается
-                        if ( $itemDepth > 0 || $itemWidth > 0 || $itemHeight > 0 ) {
-                            $stackMaxDepth  = max( $stackMaxDepth, $itemDepth );
-                            $stackMaxWidth  = max( $stackMaxWidth, $itemWidth );
-                            $stackSumHeight += (int) $cartProduct['quantity'] * $itemHeight;
-                        }
-
-                        if ( ( $maxHeight > 0 && $itemHeight > $maxHeight ) || ( $maxDepth > 0 && $itemDepth > $maxDepth ) || ( $maxWidth > 0 && $itemWidth > $maxWidth ) ) {
-                            return false;
-                        }
+                // P0 Fix: единая функция габаритов yd_calculate_package_dims() — и корзина, и заказ
+                $cartProducts = array();
+                foreach ( $package['contents'] as $cartProduct ) {
+                    $product = isset( $cartProduct['data'] ) ? $cartProduct['data'] : wc_get_product( $cartProduct['product_id'] );
+                    if ( ! $product || $product->is_virtual() || $product->is_downloadable() ) {
+                        continue;
                     }
-
-                    // Применяем рассчитанные габариты стопки
-                    if ( $stackMaxDepth > 0 || $stackMaxWidth > 0 || $stackSumHeight > 0 ) {
-                        $fullPackage['depth']  = $stackMaxDepth;
-                        $fullPackage['width']  = $stackMaxWidth;
-                        $fullPackage['height'] = $stackSumHeight;
-                    }
+                    $cartProducts[] = array(
+                        'product'      => $product,
+                        'quantity'     => (int) $cartProduct['quantity'],
+                        'variation_id' => isset( $cartProduct['variation_id'] ) ? $cartProduct['variation_id'] : 0,
+                    );
+                }
+                $fullPackage = yd_calculate_package_dims( $cartProducts, array(
+                    'default_weight'           => $defaultWeight,
+                    'default_height'           => $defaultHeight,
+                    'default_depth'            => $defaultDepth,
+                    'default_width'            => $defaultWidth,
+                    'apply_default_dimensions' => $applyDefaultDimensions,
+                    'min_weight'               => $minWeight,
+                    'max_height'               => $maxHeight,
+                    'max_depth'                => $maxDepth,
+                    'max_width'                => $maxWidth,
+                ) );
+                if ( $fullPackage === false ) {
+                    return false;
                 }
 
                 // P2 Fix: логируем предупреждение при выходе за пределы веса (вместо молчаливого пропуска)
@@ -1162,7 +1123,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         error_log( '[YD] dest=' . $destinationAddress . ' (station_id=' . ( $destinationStationId ?: 'N/A' ) . ')' );
                         error_log( '[YD] tariff=' . $tariff . ', weight=' . (int) $fullPackage['weight'] . 'g' );
                         error_log( '[YD] dimensions: L=' . $dimensions['length'] . ' W=' . $dimensions['width'] . ' H=' . $dimensions['height'] . ' cm' );
-                        error_log( '[YD] assessed_price=' . $assessedPrice . ' kopecks (' . round( $assessedPrice / 100, 2 ) . ' RUB), orderSum=' . $orderSum . ' RUB' );
+                        error_log( '[YD] assessed_price=' . $assessedPrice . ' kopecks (' . round( $assessedPrice / 100, 2 ) . ' RUB)' );
 
                         $GLOBALS['yd_pricing_cache'][ $cacheKey ] = $yd_client->calculate_price(
                             $sourceAddress,
@@ -1694,25 +1655,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $defaultWidth           = (int) $shippingData['object']->get_option( 'default_width' );
             $applyDefaultDimensions = (int) $shippingData['object']->get_option( 'apply_default_dimensions' );
             $minWeight              = (float) $shippingData['object']->get_option( 'min_weight' );
-            $fullPackage            = array( 'weight' => 0, 'height' => 0, 'depth' => 0, 'width' => 0 );
-            $itemsVolume            = 0;
-
-            $weightC    = 1;
-            $weightUnit = strtolower( get_option( 'woocommerce_weight_unit' ) );
-            if ( $weightUnit === 'kg' ) {
-                $weightC = 1000;
-            }
-
-            $dimensionC    = 1;
-            $dimensionUnit = strtolower( get_option( 'woocommerce_dimension_unit' ) );
-            switch ( $dimensionUnit ) {
-                case 'm':
-                    $dimensionC = 100;
-                    break;
-                case 'mm':
-                    $dimensionC = 0.1;
-                    break;
-            }
 
             foreach ( $orderItems as $orderItem ) {
                 $product = $orderItem->get_product();
@@ -1841,7 +1783,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     ),
                 ),
                 // P0 Fix: единая формула — копейки, с НДС, как в calculate_shipping
-                'total_assessed_price' => yd_assessed_price_minor_units( $order->get_items(), 'order' ),
+                'total_assessed_price' => yd_assessed_price_minor_units( $order->get_items( 'line_item' ), 'order' ),
                 'total_weight'         => (int) $fullPackage['weight'],
                 'tariff'               => $isSelfPickup ? 'self_pickup' : 'time_interval',
                 'delivery_cost'        => (float) $shippingData['cost'],
@@ -2396,8 +2338,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
      * AJAX: Получить ПВЗ по городу для виджета карты.
      */
     function yd_get_pvz_points() {
-        // P2 Fix: добавлена проверка nonce (была пропущена)
-        check_ajax_referer( 'yd_pvz_points', 'security' );
+        // P2 Fix: проверка nonce — используем yd_update + поле nonce (согласовано с wp_data.yd_nonce на клиенте)
+        check_ajax_referer( 'yd_update', 'nonce' );
 
         $city = isset( $_POST['city'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['city'] ) ) ) : '';
 
