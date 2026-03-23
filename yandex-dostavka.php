@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.1.0
+Version: 2.1.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -966,25 +966,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     return false;
                 }
 
-                $weightC     = 1;
-                $weightUnit = strtolower( get_option( 'woocommerce_weight_unit' ) );
-
-                if ( $weightUnit === 'kg' ) {
-                    $weightC = 1000;
-                }
-
-                $dimensionC    = 1;
-                $dimensionUnit = strtolower( get_option( 'woocommerce_dimension_unit' ) );
-
-                switch ( $dimensionUnit ) {
-                    case 'm':
-                        $dimensionC = 100;
-                        break;
-                    case 'mm':
-                        $dimensionC = 0.1;
-                        break;
-                }
-
                 $defaultWeight          = (float) $this->get_option( 'default_weight' );
                 $defaultHeight          = (int) $this->get_option( 'default_height' );
                 $defaultDepth           = (int) $this->get_option( 'default_depth' );
@@ -1645,7 +1626,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
 
             // Собираем товары и вычисляем вес/габариты
-            $orderItems   = $order->get_items();
+            $orderItems   = $order->get_items( 'line_item' );
             $declaredCost = 0;
             $items_list   = array();
 
@@ -1672,7 +1653,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $items_list[] = array(
                     'article'    => $id,
                     'name'       => $orderItem['name'],
-                    'price'      => round( (float) $orderItem['total'] / $orderItem->get_quantity(), 2 ),
+                    // Fix 2.2: include tax to match total_assessed_price basis
+                    'price'      => round( ( (float) $orderItem->get_total() + (float) $orderItem->get_total_tax() ) / $orderItem->get_quantity(), 2 ),
                     'count'      => $orderItem->get_quantity(),
                     'weight'     => 0, // будет заполнено ниже если нужно
                 );
@@ -1865,7 +1847,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         foreach ( $order->get_items( 'shipping' ) as $item ) {
             $methodId        = $item->get_method_id();
             $exactInstanceId = $item->get_instance_id();
-            $total           = $item->get_total();
+            // Fix 2.1: include shipping tax so delivery_cost matches what customer pays
+            $total           = round( (float) $item->get_total() + (float) $item->get_total_tax(), 2 );
 
             if ( strpos( $methodId, 'yd' ) !== false ) {
                 break;
