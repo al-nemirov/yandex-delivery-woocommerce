@@ -270,31 +270,43 @@ a.bxbbutton, a.nd-button { color: white !important; text-decoration: none !impor
 }
 
 /* ===== ПОДЫТОГ / ДОСТАВКА / ИТОГО — чёткие строки ===== */
+.woocommerce-checkout .shop_table tfoot .cart-subtotal {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: baseline !important;
+}
 .woocommerce-checkout .shop_table tfoot th {
     font-weight: 500 !important;
+    font-size: 14px !important;
     color: #555 !important;
     text-align: left !important;
 }
 .woocommerce-checkout .shop_table tfoot td {
     text-align: right !important;
     font-weight: 600 !important;
+    font-size: 14px !important;
 }
 
-/* ===== ИТОГО ===== */
-.woocommerce-checkout .order-total {
+/* ===== ИТОГО — одна строка: «Итого  3 483 ₽» ===== */
+.woocommerce-checkout .shop_table tfoot .order-total {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: baseline !important;
     border-top: 2px solid var(--rk-dark) !important;
     margin-top: 4px !important;
-    padding-top: 14px !important;
+    padding: 14px 0 4px !important;
 }
 .woocommerce-checkout .order-total th {
     font-size: 15px !important;
     font-weight: 700 !important;
     color: var(--rk-dark) !important;
 }
+.woocommerce-checkout .order-total td,
 .woocommerce-checkout .order-total .amount {
-    font-size: clamp(1.25rem, 3vw, 1.5rem) !important;
+    font-size: clamp(1.1rem, 2.5vw, 1.3rem) !important;
     color: var(--rk-red) !important;
     font-weight: 700 !important;
+    text-align: right !important;
 }
 
 /* Заголовок «Способ оплаты» */
@@ -307,54 +319,60 @@ a.bxbbutton, a.nd-button { color: white !important; text-decoration: none !impor
     margin-bottom: 12px;
 }
 
-/* ===== ОПЛАТА — чистый список без полосок и серого фона ===== */
+/* ===== ОПЛАТА — компактные строки ===== */
 .woocommerce-checkout #payment {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     border-radius: 0 !important;
+    padding: 0 !important;
 }
 .woocommerce-checkout .wc_payment_methods {
     list-style: none !important;
     padding: 0 !important;
     margin: 0 !important;
-    border: 1px solid var(--rk-border) !important;
-    border-radius: 8px !important;
-    overflow: hidden !important;
+    border: none !important;
 }
 .woocommerce-checkout .wc_payment_method {
-    background: var(--rk-white) !important;
+    background: transparent !important;
     border: none !important;
     border-bottom: 1px solid var(--rk-line) !important;
     border-radius: 0 !important;
-    margin-bottom: 0 !important;
-    padding: 14px 16px !important;
+    margin: 0 !important;
+    padding: 10px 0 !important;
     box-shadow: none !important;
-    transition: background 0.15s ease;
 }
 .woocommerce-checkout .wc_payment_method:last-child {
     border-bottom: none !important;
 }
-.woocommerce-checkout .wc_payment_method:has(input:checked) {
-    background: #fafafa !important;
-}
+/* Радио + текст + иконка — всё в одну строку */
 .woocommerce-checkout .wc_payment_method label {
+    font-size: 14px !important;
     font-weight: 500 !important;
     cursor: pointer !important;
-    display: flex !important;
-    align-items: center !important;
-    gap: 8px !important;
+    display: inline !important;
 }
+.woocommerce-checkout .wc_payment_method input[type="radio"] {
+    margin-right: 8px !important;
+    vertical-align: middle !important;
+}
+.woocommerce-checkout .wc_payment_method label img {
+    vertical-align: middle !important;
+    height: 20px !important;
+    width: auto !important;
+    margin-left: 4px !important;
+}
+/* Описание способа оплаты — мелкий текст без фона */
 .woocommerce-checkout .payment_box {
-    margin-top: 10px !important;
-    padding: 12px 14px !important;
+    margin: 4px 0 0 24px !important;
+    padding: 0 !important;
     background: transparent !important;
-    border-radius: 0 !important;
-    font-size: 13px !important;
-    color: #666 !important;
     border: none !important;
-    border-top: 1px solid var(--rk-line) !important;
+    font-size: 12px !important;
+    color: #999 !important;
+    line-height: 1.4 !important;
 }
+.woocommerce-checkout .payment_box::before { display: none !important; }
 
 /* ===== КНОПКА ЗАКАЗА ===== */
 #place_order {
