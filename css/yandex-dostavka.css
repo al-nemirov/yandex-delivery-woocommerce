@@ -145,81 +145,84 @@ form.checkout,
 #billing_postcode_field[style*="none"],
 #billing_state_field[style*="none"] { margin: 0 !important; padding: 0 !important; height: 0 !important; overflow: hidden !important; }
 
-/* ===== ТАБЛИЦА ЗАКАЗА — thead+tbody как таблица, tfoot как block ===== */
-.woocommerce-checkout .shop_table { border: none !important; border-collapse: collapse !important; width: 100% !important; }
-.woocommerce-checkout .shop_table tbody { display: table-row-group !important; width: 100% !important; }
-.woocommerce-checkout .shop_table tbody tr { display: table-row !important; }
-.woocommerce-checkout .shop_table tbody td,
-.woocommerce-checkout .shop_table thead th {
-    display: table-cell !important;
+/* ===== ВСЯ ТАБЛИЦА — display:block чтобы tfoot не зажимался колонками thead ===== */
+.woocommerce-checkout .shop_table,
+.woocommerce-checkout .shop_table thead,
+.woocommerce-checkout .shop_table tbody,
+.woocommerce-checkout .shop_table tfoot,
+.woocommerce-checkout .shop_table tr,
+.woocommerce-checkout .shop_table th,
+.woocommerce-checkout .shop_table td {
+    display: block !important;
+    width: 100% !important;
     border: none !important;
-    border-bottom: 1px solid var(--rk-line) !important;
-    padding: 10px 8px !important;
-    vertical-align: top !important;
-    font-size: 14px !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
 }
-/* Шапка таблицы */
-.woocommerce-checkout .shop_table thead {
-    display: table-header-group !important;
+.woocommerce-checkout .shop_table { border: none !important; }
+
+/* Шапка: ТОВАР ... ПОДЫТОГ */
+.woocommerce-checkout .shop_table thead tr {
+    display: flex !important;
+    justify-content: space-between !important;
+    padding: 0 0 8px !important;
+    border-bottom: 1px solid var(--rk-border) !important;
 }
 .woocommerce-checkout .shop_table thead th {
+    display: inline !important;
+    width: auto !important;
     font-size: 12px !important;
     font-weight: 600 !important;
     color: #888 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.04em !important;
-    padding: 0 8px 8px !important;
-    border-bottom: 1px solid var(--rk-border) !important;
 }
-/* Название товара */
+
+/* Строки товаров: название ... цена */
+.woocommerce-checkout .shop_table tbody .cart_item {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+    padding: 12px 0 !important;
+    border-bottom: 1px solid var(--rk-line) !important;
+}
 .woocommerce-checkout .shop_table .product-name {
+    flex: 1 !important;
     font-weight: 500 !important;
+    font-size: 14px !important;
     line-height: 1.45 !important;
-    width: 70% !important;
 }
 .woocommerce-checkout .shop_table .product-name .product-quantity {
     color: #888 !important;
     font-weight: 400 !important;
 }
-/* Цена */
 .woocommerce-checkout .shop_table .product-total {
     font-weight: 600 !important;
+    font-size: 14px !important;
     white-space: nowrap !important;
     text-align: right !important;
 }
 
-/* ===== TFOOT: всё block + ширина 100% от таблицы ===== */
-.woocommerce-checkout .shop_table tfoot {
-    display: table-footer-group !important;
-}
+/* ===== TFOOT: подытог, доставка, итого — всё на 100% ширины ===== */
 .woocommerce-checkout .shop_table tfoot tr {
     display: flex !important;
     justify-content: space-between !important;
     align-items: baseline !important;
-    padding: 10px 8px !important;
-    border: none !important;
+    padding: 10px 0 !important;
     border-bottom: 1px solid var(--rk-line) !important;
-    width: 100% !important;
-    box-sizing: border-box !important;
 }
-.woocommerce-checkout .shop_table tfoot th,
-.woocommerce-checkout .shop_table tfoot td {
-    display: inline !important;
-    border: none !important;
-    padding: 0 !important;
-}
-.woocommerce-checkout .shop_table tfoot td {
-    margin-left: auto !important;
-    text-align: right !important;
-}
-/* Доставка: вертикальная — th сверху, td 100% ниже */
+.woocommerce-checkout .shop_table tfoot th { display: inline !important; width: auto !important; }
+.woocommerce-checkout .shop_table tfoot td { display: inline !important; width: auto !important; margin-left: auto !important; text-align: right !important; }
+
+/* Доставка: th сверху, td с кнопкой ПВЗ на всю ширину */
 .woocommerce-checkout .shop_table tfoot .shipping {
     flex-wrap: wrap !important;
 }
 .woocommerce-checkout .shop_table tfoot .shipping th {
     display: block !important;
     width: 100% !important;
-    margin-bottom: 6px !important;
+    margin-bottom: 4px !important;
 }
 .woocommerce-checkout .shop_table tfoot .shipping td {
     display: block !important;
