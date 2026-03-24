@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.9.0
+Version: 2.10.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -4054,3 +4054,92 @@ function yd_migrate_from_nemirov() {
 
 register_activation_hook( __FILE__, 'yd_migrate_from_nemirov' );
 add_action( 'plugins_loaded', 'yd_migrate_from_nemirov', 1 );
+
+// ═══ Колонка «ЯД Доставка» в списке заказов WooCommerce ═══
+
+add_filter( 'manage_edit-shop_order_columns', 'yd_add_order_column', 20 );
+add_filter( 'manage_woocommerce_page_wc-orders_columns', 'yd_add_order_column', 20 ); // HPOS
+function yd_add_order_column( $columns ) {
+    $new = array();
+    foreach ( $columns as $key => $label ) {
+        $new[ $key ] = $label;
+        if ( $key === 'order_status' ) {
+            $new['yd_delivery'] = 'ЯД Доставка';
+        }
+    }
+    return $new;
+}
+
+add_action( 'manage_shop_order_posts_custom_column', 'yd_render_order_column', 10, 2 );
+add_action( 'manage_woocommerce_page_wc-orders_custom_column', 'yd_render_order_column_hpos', 10, 2 ); // HPOS
+function yd_render_order_column( $column, $post_id ) {
+    if ( $column !== 'yd_delivery' ) return;
+    $order = wc_get_order( $post_id );
+    if ( ! $order ) return;
+    yd_render_order_column_content( $order );
+}
+function yd_render_order_column_hpos( $column, $order ) {
+    if ( $column !== 'yd_delivery' ) return;
+    if ( ! $order instanceof WC_Order ) {
+        $order = wc_get_order( $order );
+    }
+    if ( ! $order ) return;
+    yd_render_order_column_content( $order );
+}
+function yd_render_order_column_content( $order ) {
+    $tracking = $order->get_meta( 'yd_tracking_number' );
+    $status   = $order->get_meta( 'yd_last_status' );
+    $error    = $order->get_meta( 'yd_error' );
+
+    $shippingData = bxbGetShippingData( $order );
+    $isYd = isset( $shippingData['method_id'] ) && strpos( $shippingData['method_id'], 'yd' ) !== false;
+
+    if ( ! $isYd ) {
+        echo '<span style="color:#ccc;">—</span>';
+        return;
+    }
+
+    if ( $tracking ) {
+        // Трекинг-номер (короткий)
+        $short = substr( $tracking, 0, 8 ) . '…';
+        echo '<span title="' . esc_attr( $tracking ) . '" style="font-size:11px;font-family:monospace;">' . esc_html( $short ) . '</span><br>';
+        // Статус
+        if ( $status ) {
+            echo '<span style="font-size:11px;color:#666;">' . esc_html( $status ) . '</span>';
+        } else {
+            echo '<span style="font-size:11px;color:#999;">ожидание</span>';
+        }
+        // Оплата при получении
+        if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
+            echo '<br><span style="font-size:10px;color:#b26200;">&#128176; ' . strip_tags( wc_price( $order->get_total() ) ) . '</span>';
+        }
+    } elseif ( $error ) {
+        echo '<span style="color:#c00;font-size:11px;" title="' . esc_attr( $error ) . '">&#10060; ошибка</span>';
+    } else {
+        echo '<span style="color:#999;font-size:11px;">не отправлен</span>';
+    }
+}
+
+// ═══ Массовая синхронизация статусов (кнопка в админке) ═══
+
+add_action( 'admin_notices', 'yd_bulk_sync_admin_notice' );
+function yd_bulk_sync_admin_notice() {
+    if ( ! current_user_can( 'edit_shop_orders' ) ) return;
+    $screen = get_current_screen();
+    if ( ! $screen ) return;
+    $is_orders = ( $screen->id === 'edit-shop_order' || $screen->id === 'woocommerce_page_wc-orders' );
+    if ( ! $is_orders ) return;
+
+    // Обработка нажатия
+    if ( isset( $_GET['yd_bulk_sync'] ) && wp_verify_nonce( $_GET['_yd_nonce'] ?? '', 'yd_bulk_sync' ) ) {
+        yd_sync_order_statuses();
+        echo '<div class="notice notice-success"><p>Яндекс Доставка: статусы синхронизированы.</p></div>';
+        return;
+    }
+
+    $sync_url = wp_nonce_url( add_query_arg( 'yd_bulk_sync', '1' ), 'yd_bulk_sync', '_yd_nonce' );
+    echo '<div class="notice notice-info" style="padding:8px 12px;display:flex;align-items:center;gap:12px;">';
+    echo '<span>Яндекс Доставка</span>';
+    echo '<a href="' . esc_url( $sync_url ) . '" class="button button-small">Синхронизировать статусы</a>';
+    echo '</div>';
+}
