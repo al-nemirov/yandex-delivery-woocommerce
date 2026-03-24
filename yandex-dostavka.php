@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.6.0
+Version: 2.6.1
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1726,6 +1726,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 echo '<p><span style="display: inline-block;">Номер отправления:</span>';
                 echo '<span style="margin-left: 10px"><b>' . esc_html( $trackingNumber ) . '</b></span>';
 
+                // Способ оплаты
+                $isCodMethod = ( strpos( $shippingData['method_id'], '_after' ) !== false );
+                $paymentMethod = $order->get_payment_method();
+                $paymentTitle  = $order->get_payment_method_title();
+                if ( $isCodMethod || $paymentMethod === 'cod' ) {
+                    echo '<p style="color:#b26200;margin:4px 0;">&#128176; ' . esc_html( $paymentTitle ) . ' — <strong>' . wc_price( $order->get_total() ) . '</strong></p>';
+                } else {
+                    echo '<p style="color:#059377;margin:4px 0;">&#9989; ' . esc_html( $paymentTitle ) . '</p>';
+                }
+
                 if ( ! $isConfirmed ) {
                     echo '<p style="margin: 8px 0;"><span style="color: #b26200; font-weight: 600;">&#9888; Черновик — не подтверждён</span></p>';
                     echo '<p><input type="submit" class="button button-primary" name="yd_confirm_parsel" value="Подтвердить заказ"></p>';
@@ -1815,6 +1825,24 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                          ) . '</a></p>';
                     echo '<p>Адрес пункта выдачи: ' . esc_html( $yd_address ) . '</p>';
                 }
+                // Информация об оплате
+                $isCodMethod = ( strpos( $shippingData['method_id'], '_after' ) !== false );
+                $paymentMethod = $order->get_payment_method();
+                $paymentTitle  = $order->get_payment_method_title();
+                $orderTotal    = $order->get_total();
+                $shippingCost  = $shippingData['cost'];
+
+                echo '<hr style="margin:8px 0;">';
+                echo '<p><strong>Оплата:</strong> ' . esc_html( $paymentTitle ?: $paymentMethod ) . '</p>';
+                if ( $isCodMethod || $paymentMethod === 'cod' ) {
+                    echo '<p style="color:#b26200;">&#128176; Оплата при получении</p>';
+                    echo '<p>Сумма к оплате клиентом: <strong>' . wc_price( $orderTotal ) . '</strong></p>';
+                    echo '<p><small>Товары: ' . wc_price( $orderTotal - $shippingCost ) . ' + Доставка: ' . wc_price( $shippingCost ) . '</small></p>';
+                } else {
+                    echo '<p style="color:#059377;">&#9989; Предоплата (' . wc_price( $orderTotal ) . ')</p>';
+                }
+                echo '<hr style="margin:8px 0;">';
+
                 echo '<p>После нажатия кнопки заказ будет создан как черновик в Яндекс Доставке.</p>';
                 echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Создать черновик заказа"></p>';
             }
