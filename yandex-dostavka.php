@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.5.2
+Version: 2.6.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1992,13 +1992,20 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $sku = is_callable( array( $product, 'get_sku' ) ) ? $product->get_sku() : '';
                 $id  = (string) ( $sku !== '' ? $sku : $orderItem['product_id'] );
 
+                $unitPriceRub = round( ( (float) $orderItem->get_total() + (float) $orderItem->get_total_tax() ) / $orderItem->get_quantity(), 2 );
+                $unitPriceKopecks = (int) round( $unitPriceRub * 100 );
+
                 $items_list[] = array(
                     'article'    => $id,
                     'name'       => $orderItem['name'],
-                    // Fix 2.2: include tax to match total_assessed_price basis
-                    'price'      => round( ( (float) $orderItem->get_total() + (float) $orderItem->get_total_tax() ) / $orderItem->get_quantity(), 2 ),
+                    'price'      => $unitPriceRub,
                     'count'      => $orderItem->get_quantity(),
-                    'weight'     => 0, // будет заполнено ниже если нужно
+                    'weight'     => 0,
+                    'billing_details' => array(
+                        'unit_price'          => $unitPriceKopecks,
+                        'assessed_unit_price' => $unitPriceKopecks,
+                        'nds'                 => -1, // без НДС (УСН)
+                    ),
                 );
 
             }
@@ -2117,9 +2124,23 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $request_data['destination']['platform_station_id'] = $yd_code;
             }
 
+            // billing_info — обязательное поле API ЯД
+            // Сумма заказа на сайте = товары + доставка (то что клиент видел при оформлении)
+            $orderTotalOnSite = (float) $order->get_total(); // полная сумма заказа как на сайте
+            $deliveryCostKopecks = (int) round( (float) $shippingData['cost'] * 100 );
+
             if ( $isCod ) {
-                $request_data['payment_method'] = 'cash_on_delivery';
-                $request_data['payment_sum']    = round( $declaredCost + $shippingData['cost'], 2 );
+                // Оплата при получении — клиент платит полную сумму заказа при доставке
+                $request_data['billing_info'] = array(
+                    'payment_method' => 'card_on_receipt',
+                    'delivery_cost'  => $deliveryCostKopecks,
+                );
+            } else {
+                // Уже оплачено онлайн
+                $request_data['billing_info'] = array(
+                    'payment_method' => 'already_paid',
+                    'delivery_cost'  => 0,
+                );
             }
 
             yd_log( 'CREATE REQUEST order #' . $orderId . ' | request_data=' . wp_json_encode( $request_data ), $orderId );
