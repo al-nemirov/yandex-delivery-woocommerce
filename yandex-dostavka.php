@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.6.2
+Version: 2.7.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1969,12 +1969,57 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     /**
      * Формирует source для API — либо platform_station_id, либо address (не оба).
      */
+    /**
+     * Формирует source для API create_request.
+     * API create использует "platform_station" (не "platform_station_id" как pricing-calculator).
+     * Передаётся только одно: station или address.
+     */
+    /**
+     * Формирует source для API create_request (новый формат 2025+).
+     * platform_station — объект с platform_id.
+     */
     function yd_build_source( $sourceAddress, $pointForParcelName ) {
         $stationId = $pointForParcelName ? getReceptionPointCodeByName( $pointForParcelName ) : '';
         if ( ! empty( $stationId ) ) {
-            return array( 'platform_station_id' => $stationId );
+            return array(
+                'platform_station' => array( 'platform_id' => $stationId ),
+            );
         }
         return array( 'address' => $sourceAddress );
+    }
+
+    /**
+     * Формирует destination для API create_request (новый формат 2025+).
+     * Для ПВЗ: type=platform_station + platform_station.platform_id
+     * Для курьера: type=custom_location + custom_location.details
+     */
+    function yd_build_destination( $isSelfPickup, $destinationAddress, $pvzCode = '', $order = null ) {
+        if ( $isSelfPickup && ! empty( $pvzCode ) ) {
+            return array(
+                'type'             => 'platform_station',
+                'platform_station' => array( 'platform_id' => $pvzCode ),
+            );
+        }
+        // Курьерская доставка — custom_location с адресом
+        $city = '';
+        $street = '';
+        if ( $order ) {
+            $city = $order->get_shipping_city() ?: $order->get_billing_city();
+            $street = trim( $order->get_shipping_address_1() . ' ' . $order->get_shipping_address_2() );
+            if ( empty( $street ) ) {
+                $street = trim( $order->get_billing_address_1() . ' ' . $order->get_billing_address_2() );
+            }
+        }
+        return array(
+            'type'            => 'custom_location',
+            'custom_location' => array(
+                'details' => array(
+                    'full_address' => $destinationAddress,
+                    'locality'     => $city,
+                    'street'       => $street,
+                ),
+            ),
+        );
     }
 
     function yd_get_tracking_code( $postId )
@@ -2128,15 +2173,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'operator_request_id' => $orderIdForApi,
                     'comment'             => sprintf( 'WooCommerce заказ #%s', $order->get_order_number() ),
                 ),
-                'source' => yd_build_source( $sourceAddress, $pointForParcelName ),
-                'destination' => array(
-                    'address'    => $destinationAddress,
-                    'type'       => $isSelfPickup ? 'pickup_point' : 'door',
-                ),
-                'contact' => array(
-                    'name'  => $customerName,
-                    'phone' => $customerPhone,
-                    'email' => $customerEmail,
+                'source'      => yd_build_source( $sourceAddress, $pointForParcelName ),
+                'destination' => yd_build_destination( $isSelfPickup, $destinationAddress, isset( $yd_code ) ? $yd_code : '', $order ),
+                'recipient_info' => array(
+                    'first_name' => $order->get_shipping_first_name() ?: $order->get_billing_first_name(),
+                    'last_name'  => $order->get_shipping_last_name() ?: $order->get_billing_last_name(),
+                    'phone'      => $customerPhone,
+                    'email'      => $customerEmail,
                 ),
                 'items' => $items_list,
                 'places' => array(
@@ -2149,16 +2192,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         ),
                     ),
                 ),
-                // P0 Fix: единая формула — копейки, с НДС, как в calculate_shipping
-                'total_assessed_price' => yd_assessed_price_minor_units( $order->get_items( 'line_item' ), 'order' ),
-                'total_weight'         => (int) $fullPackage['weight'],
-                'tariff'               => $isSelfPickup ? 'self_pickup' : 'time_interval',
-                'delivery_cost'        => (float) $shippingData['cost'],
+                'last_mile_policy' => $isSelfPickup ? 'self_pickup' : 'time_interval',
             );
-
-            if ( $isSelfPickup && ! empty( $yd_code ) ) {
-                $request_data['destination']['platform_station_id'] = $yd_code;
-            }
 
             // billing_info — обязательное поле API ЯД
             // Сумма заказа на сайте = товары + доставка (то что клиент видел при оформлении)
