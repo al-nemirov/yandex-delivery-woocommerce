@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.5.1
+Version: 2.5.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -740,17 +740,19 @@ function yd_sync_single_order_status( $postId ) {
 function yd_log( $message, $order_id = null, $key = null ) {
     $debug_enabled = false;
 
-    // Проверяем debug_mode по заказу
     if ( $order_id ) {
         $debug_enabled = yd_is_debug( $order_id );
     }
 
-    // Всегда пишем в error_log при WP_DEBUG или debug_mode
+    // Пишем в отдельный лог-файл wp-content/yd-debug.log (как у YooKassa)
     if ( $debug_enabled || ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) {
-        error_log( '[YD DEBUG] ' . $message );
+        $log_file = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/yd-debug.log' : ABSPATH . 'wp-content/yd-debug.log';
+        $timestamp = current_time( 'Y-m-d H:i:s' );
+        $line = '[' . $timestamp . '] ' . $message . PHP_EOL;
+        @file_put_contents( $log_file, $line, FILE_APPEND | LOCK_EX );
     }
 
-    // Всегда сохраняем лог в мету заказа если есть order_id и debug включён
+    // Сохраняем в мету заказа для отображения в мета-боксе
     if ( $order_id && $debug_enabled ) {
         $order = wc_get_order( $order_id );
         if ( $order ) {
@@ -767,6 +769,17 @@ function yd_log( $message, $order_id = null, $key = null ) {
             $order->save();
         }
     }
+}
+
+/**
+ * Пишет в yd-debug.log всегда (без проверки debug_mode).
+ * Для критических диагностических сообщений.
+ */
+function yd_log_always( $message ) {
+    $log_file = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/yd-debug.log' : ABSPATH . 'wp-content/yd-debug.log';
+    $timestamp = current_time( 'Y-m-d H:i:s' );
+    $line = '[' . $timestamp . '] ' . $message . PHP_EOL;
+    @file_put_contents( $log_file, $line, FILE_APPEND | LOCK_EX );
 }
 
 /**
@@ -1808,36 +1821,77 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
     }
 
+    /**
+     * Проверяет nonce при сохранении заказа.
+     * Поддерживает как CPT (update-post_ID), так и HPOS (update-order_ID).
+     */
+    function yd_verify_order_nonce( $order_id ) {
+        if ( ! isset( $_POST['_wpnonce'] ) ) {
+            return false;
+        }
+        $nonce = sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) );
+        // CPT-формат
+        if ( wp_verify_nonce( $nonce, 'update-post_' . $order_id ) ) {
+            return true;
+        }
+        // HPOS-формат
+        if ( wp_verify_nonce( $nonce, 'update-order_' . $order_id ) ) {
+            return true;
+        }
+        // WC generic
+        if ( isset( $_POST['woocommerce_meta_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['woocommerce_meta_nonce'] ) ), 'woocommerce_save_data' ) ) {
+            return true;
+        }
+        return false;
+    }
+
     function yd_meta_tracking_code( $postId )
     {
         if ( ! current_user_can( 'edit_shop_orders' ) ) {
             return;
         }
+
+        // Предотвращаем повторный вызов (хук может сработать дважды)
+        static $processed = array();
+        $action_key = '';
+        if ( isset( $_POST['yd_create_parsel'] ) ) { $action_key = 'create_' . $postId; }
+        elseif ( isset( $_POST['yd_confirm_parsel'] ) ) { $action_key = 'confirm_' . $postId; }
+        elseif ( isset( $_POST['yd_refresh_status'] ) ) { $action_key = 'refresh_' . $postId; }
+        elseif ( isset( $_POST['yd_create_act'] ) ) { $action_key = 'act_' . $postId; }
+        if ( $action_key && isset( $processed[ $action_key ] ) ) {
+            return;
+        }
+        if ( $action_key ) {
+            $processed[ $action_key ] = true;
+        }
+
+        // Логируем что хук вызван (всегда в yd-debug.log, для диагностики)
+        yd_log_always( 'HOOK fired for order #' . $postId . ' | POST keys: ' . implode( ',', array_keys( $_POST ) ) );
+
+        if ( ! yd_verify_order_nonce( $postId ) ) {
+            yd_log_always( 'NONCE FAILED for order #' . $postId );
+            return;
+        }
+
         if ( isset( $_POST['yd_create_parsel'] ) ) {
-            if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
-                yd_get_tracking_code( $postId );
-            }
+            yd_log_always( 'yd_create_parsel detected for order #' . $postId );
+            yd_get_tracking_code( $postId );
         }
         if ( isset( $_POST['yd_confirm_parsel'] ) ) {
-            if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
-                yd_confirm_order( $postId );
-            }
+            yd_confirm_order( $postId );
         }
         if ( isset( $_POST['yd_refresh_status'] ) ) {
-            if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
-                yd_sync_single_order_status( $postId );
-            }
+            yd_sync_single_order_status( $postId );
         }
         if ( isset( $_POST['yd_create_act'] ) ) {
-            if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
-                bxbCreateAct( $postId );
-            }
+            bxbCreateAct( $postId );
         }
     }
 
     add_action( 'woocommerce_process_shop_order_meta', 'yd_meta_tracking_code', 0, 2 );
-    // HPOS (WC 7+): обработка кнопок в мета-боксе при сохранении заказа
+    // HPOS (WC 7+)
     add_action( 'woocommerce_update_order', 'yd_meta_tracking_code', 0, 2 );
+    add_action( 'save_post_shop_order', 'yd_meta_tracking_code', 10, 1 );
 
     function bxbCreateAct( $postId )
     {
