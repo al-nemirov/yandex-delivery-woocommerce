@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.10.0
+Version: 2.10.1
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1978,9 +1978,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         echo '<p><small>' . esc_html( $lastStatusDate ) . '</small></p>';
                     }
                 } else {
-                    // Фоллбэк: первый запрос ещё не прошёл — показываем из API
-                    echo '<p>Текущий статус заказа в Яндекс Доставке:</p>';
-                    echo bxbGetLastStatusInOrder( $orderData );
+                    echo '<p style="color:#999;">Нажмите «Обновить статус» для получения данных из ЯД.</p>';
                 }
 
                 if ( $lastSync ) {
@@ -2081,7 +2079,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         static $processed = array();
         $action_key = '';
         if ( isset( $_POST['yd_create_parsel'] ) ) { $action_key = 'create_' . $postId; }
-        elseif ( isset( $_POST['yd_confirm_parsel'] ) ) { $action_key = 'confirm_' . $postId; }
+        elseif ( isset( $_POST['yd_resend_parsel'] ) ) { $action_key = 'resend_' . $postId; }
         elseif ( isset( $_POST['yd_refresh_status'] ) ) { $action_key = 'refresh_' . $postId; }
         elseif ( isset( $_POST['yd_create_act'] ) ) { $action_key = 'act_' . $postId; }
         if ( $action_key && isset( $processed[ $action_key ] ) ) {
@@ -2112,13 +2110,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $order->delete_meta_data( 'yd_link' );
                 $order->delete_meta_data( 'yd_act_link' );
                 $order->delete_meta_data( 'yd_error' );
-                $order->delete_meta_data( 'yd_confirmed' );
                 $order->delete_meta_data( 'yd_last_status' );
                 $order->delete_meta_data( 'yd_last_status_code' );
                 $order->delete_meta_data( 'yd_last_status_date' );
                 $order->delete_meta_data( 'yd_tracking_history' );
                 $order->delete_meta_data( 'yd_last_sync' );
                 $order->delete_meta_data( 'yd_debug_log' );
+                // Инкремент счётчика для уникального operator_request_id
+                $resend = (int) $order->get_meta( 'yd_resend_count' );
+                $order->update_meta_data( 'yd_resend_count', $resend + 1 );
                 $order->save();
                 yd_get_tracking_code( $postId );
             }
@@ -2134,7 +2134,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     add_action( 'woocommerce_process_shop_order_meta', 'yd_meta_tracking_code', 0, 2 );
     // HPOS (WC 7+)
     add_action( 'woocommerce_update_order', 'yd_meta_tracking_code', 0, 2 );
-    add_action( 'save_post_shop_order', 'yd_meta_tracking_code', 10, 1 );
+    add_action( 'save_post_shop_order', function( $post_id ) { yd_meta_tracking_code( $post_id ); }, 10, 1 );
 
     function bxbCreateAct( $postId )
     {
@@ -2416,10 +2416,14 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 }
             }
 
-            // Идентификатор заказа
+            // Идентификатор заказа (уникальный при повторной отправке)
             $orderIdForApi = ( $shippingData['object']->get_option( 'order_prefix' ) ?
                     $shippingData['object']->get_option( 'order_prefix' ) . '_' : '' )
                              . $order->get_order_number();
+            $resendCount = (int) $order->get_meta( 'yd_resend_count' );
+            if ( $resendCount > 0 ) {
+                $orderIdForApi .= '_r' . $resendCount;
+            }
 
             // Собираем тело запроса для Yandex Delivery API
             $request_data = array(
@@ -2494,69 +2498,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 $order->update_meta_data( 'yd_link', $labelUrl );
                 $order->delete_meta_data( 'yd_error' );
-                $order->delete_meta_data( 'yd_confirmed' );
                 $order->save();
             } else {
                 $order->update_meta_data( 'yd_error', 'API не вернул request_id. Ответ: ' . wp_json_encode( $answer ) );
                 $order->save();
             }
-        }
-    }
-
-    /**
-     * Подтвердить черновик заказа в Яндекс Доставке.
-     */
-    function yd_confirm_order( $postId )
-    {
-        $order = wc_get_order( $postId );
-        if ( ! $order ) {
-            return;
-        }
-
-        $shippingData = bxbGetShippingData( $order );
-        if ( ! isset( $shippingData['object'] ) ) {
-            return;
-        }
-
-        $trackingNumber = $order->get_meta( 'yd_tracking_number' );
-        if ( empty( $trackingNumber ) ) {
-            $order->update_meta_data( 'yd_error', 'Нет номера заказа для подтверждения' );
-            $order->save();
-            return;
-        }
-
-        $key = $shippingData['object']->get_option( 'key' );
-        $yd_client = new Yandex_Delivery_API( $key );
-
-        yd_log( 'CONFIRM REQUEST order #' . $postId . ' | request_id=' . $trackingNumber, $postId );
-
-        $answer = $yd_client->confirm_request( $trackingNumber );
-
-        yd_log( 'CONFIRM RESPONSE order #' . $postId . ' | response=' . wp_json_encode( $answer ), $postId );
-
-        if ( is_wp_error( $answer ) ) {
-            $errorMsg = $answer->get_error_message();
-            $order->update_meta_data( 'yd_error', 'Ошибка подтверждения: ' . $errorMsg );
-            $order->save();
-            yd_log( 'CONFIRM ERROR order #' . $postId . ': ' . $errorMsg, $postId );
-            return;
-        }
-
-        $order->update_meta_data( 'yd_confirmed', '1' );
-        $order->delete_meta_data( 'yd_error' );
-        $order->save();
-
-        // Автогенерация акта после подтверждения
-        $autoact = (int) $shippingData['object']->get_option( 'autoact' );
-        if ( $autoact === 1 ) {
-            bxbCreateAct( $postId );
-        }
-
-        // Автоустановка статуса WC заказа
-        $autoStatus = $shippingData['object']->get_option( 'order_status_send' );
-        if ( $autoStatus && wc_is_order_status( $autoStatus ) ) {
-            $order->update_status( $autoStatus, sprintf( 'Заказ подтверждён в Яндекс Доставке: %s', $trackingNumber ) );
-            do_action( 'woocommerce_yd_tracking_code', 'confirm', $order, $trackingNumber );
         }
     }
 
