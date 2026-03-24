@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.4.0
+Version: 2.5.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -730,6 +730,80 @@ function yd_sync_single_order_status( $postId ) {
 }
 
 /**
+ * Логирование с учётом debug_mode.
+ * Пишет в error_log и (опционально) в мету заказа.
+ *
+ * @param string       $message  Сообщение
+ * @param int|null     $order_id ID заказа (для сохранения лога в мету)
+ * @param string|null  $key      API-ключ метода (для проверки debug_mode). Если null — логирует всегда.
+ */
+function yd_log( $message, $order_id = null, $key = null ) {
+    $debug_enabled = false;
+
+    if ( $key === null ) {
+        // Если ключ не передан — проверяем по заказу
+        if ( $order_id ) {
+            $order = wc_get_order( $order_id );
+            if ( $order ) {
+                $shippingData = bxbGetShippingData( $order );
+                if ( isset( $shippingData['object'] ) ) {
+                    $debug_enabled = $shippingData['object']->get_option( 'debug_mode' ) === '1';
+                }
+            }
+        }
+    } else {
+        // Ищем debug_mode среди всех yd-методов
+        $methods = WC()->shipping()->get_shipping_methods();
+        foreach ( $methods as $method ) {
+            if ( $method instanceof WC_YD_Parent_Method && $method->get_option( 'key' ) === $key ) {
+                $debug_enabled = $method->get_option( 'debug_mode' ) === '1';
+                break;
+            }
+        }
+    }
+
+    if ( ! $debug_enabled && ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) {
+        return;
+    }
+
+    error_log( '[YD DEBUG] ' . $message );
+
+    // Сохраняем лог в мету заказа (последние 50 записей)
+    if ( $order_id ) {
+        $order = wc_get_order( $order_id );
+        if ( $order && $debug_enabled ) {
+            $log = $order->get_meta( 'yd_debug_log' );
+            $entries = $log ? json_decode( $log, true ) : array();
+            if ( ! is_array( $entries ) ) {
+                $entries = array();
+            }
+            $entries[] = current_time( 'Y-m-d H:i:s' ) . ' — ' . $message;
+            // Ограничиваем 50 записями
+            if ( count( $entries ) > 50 ) {
+                $entries = array_slice( $entries, -50 );
+            }
+            $order->update_meta_data( 'yd_debug_log', wp_json_encode( $entries ) );
+            $order->save();
+        }
+    }
+}
+
+/**
+ * Проверяет, включён ли debug_mode для заказа.
+ */
+function yd_is_debug( $order_id ) {
+    $order = wc_get_order( $order_id );
+    if ( ! $order ) {
+        return false;
+    }
+    $shippingData = bxbGetShippingData( $order );
+    if ( ! isset( $shippingData['object'] ) ) {
+        return false;
+    }
+    return $shippingData['object']->get_option( 'debug_mode' ) === '1';
+}
+
+/**
  * Проверяет, означает ли статус доставки что посылка вручена получателю.
  */
 function yd_is_delivered_status( $statusName ) {
@@ -959,6 +1033,17 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'desc_tip' => 'Добавляется к номеру заказа при выгрузке',
                         'type'     => 'text',
                         'default'  => 'wp'
+                    ),
+                    'debug_mode'                          => array(
+                        'title'    => 'Режим отладки',
+                        'desc_tip' => 'Включает подробное логирование всех API-запросов и ответов в debug.log и мета-бокс заказа. Выключайте на продакшене!',
+                        'type'     => 'select',
+                        'class'    => 'wc-enhanced-select',
+                        'default'  => '0',
+                        'options'  => [
+                            '0' => 'Выключено',
+                            '1' => 'Включено',
+                        ]
                     ),
                 );
 
@@ -1615,6 +1700,22 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 echo '<p><b><u>Возникла ошибка</u></b>: ' . wp_kses_post( $errorText ) . '</p>';
                 echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Попробовать снова"></p>';
 
+                // Дебаг-лог при ошибке
+                if ( yd_is_debug( $order_id ) ) {
+                    $debugLog = $order->get_meta( 'yd_debug_log' );
+                    if ( $debugLog ) {
+                        $entries = json_decode( $debugLog, true );
+                        if ( is_array( $entries ) && ! empty( $entries ) ) {
+                            echo '<details style="margin-top:10px;"><summary style="cursor:pointer;color:#c00;font-size:12px;">&#128736; Debug log (' . count( $entries ) . ')</summary>';
+                            echo '<div style="max-height:200px;overflow-y:auto;font-size:11px;background:#fff5f5;padding:6px;border:1px solid #fdd;border-radius:4px;margin-top:4px;">';
+                            foreach ( array_reverse( $entries ) as $entry ) {
+                                echo '<div style="border-bottom:1px solid #fee;padding:2px 0;">' . esc_html( $entry ) . '</div>';
+                            }
+                            echo '</div></details>';
+                        }
+                    }
+                }
+
                 if ( $shippingData['object']->self_type ) {
                     echo '<p>Код пункта выдачи: <a href="#" data-yandex-dostavka-reception-point="' . esc_attr( $receptionPoint ) . '" data-yandex-dostavka-widget-key="" data-id="' . esc_attr(
                             $order_id
@@ -1683,6 +1784,22 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p><small style="color:#999;">Синхронизация: ' . esc_html( $lastSync ) . '</small></p>';
                 }
                 echo '<p><input type="submit" class="button" name="yd_refresh_status" value="Обновить статус"></p>';
+
+                // Дебаг-лог (если включён)
+                if ( yd_is_debug( $order_id ) ) {
+                    $debugLog = $order->get_meta( 'yd_debug_log' );
+                    if ( $debugLog ) {
+                        $entries = json_decode( $debugLog, true );
+                        if ( is_array( $entries ) && ! empty( $entries ) ) {
+                            echo '<details style="margin-top:10px;"><summary style="cursor:pointer;color:#666;font-size:12px;">&#128736; Debug log (' . count( $entries ) . ')</summary>';
+                            echo '<div style="max-height:200px;overflow-y:auto;font-size:11px;background:#f9f9f9;padding:6px;border:1px solid #ddd;border-radius:4px;margin-top:4px;">';
+                            foreach ( array_reverse( $entries ) as $entry ) {
+                                echo '<div style="border-bottom:1px solid #eee;padding:2px 0;">' . esc_html( $entry ) . '</div>';
+                            }
+                            echo '</div></details>';
+                        }
+                    }
+                }
             } else {
                 if ( $shippingData['object']->self_type ) {
                     if ( $pvzCode === '' ) {
@@ -1969,13 +2086,17 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $request_data['payment_sum']    = round( $declaredCost + $shippingData['cost'], 2 );
             }
 
+            yd_log( 'CREATE REQUEST order #' . $orderId . ' | request_data=' . wp_json_encode( $request_data ), $orderId );
+
             $answer = $yd_client->create_request( $request_data );
+
+            yd_log( 'CREATE RESPONSE order #' . $orderId . ' | response=' . wp_json_encode( $answer ), $orderId );
 
             if ( is_wp_error( $answer ) ) {
                 $errorMsg = $answer->get_error_message();
                 $order->update_meta_data( 'yd_error', $errorMsg );
                 $order->save();
-                error_log( '[YD] create_request error for order #' . $orderId . ': ' . $errorMsg );
+                yd_log( 'CREATE ERROR order #' . $orderId . ': ' . $errorMsg, $orderId );
                 return;
             }
 
@@ -2033,13 +2154,18 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
         $key = $shippingData['object']->get_option( 'key' );
         $yd_client = new Yandex_Delivery_API( $key );
+
+        yd_log( 'CONFIRM REQUEST order #' . $postId . ' | request_id=' . $trackingNumber, $postId );
+
         $answer = $yd_client->confirm_request( $trackingNumber );
+
+        yd_log( 'CONFIRM RESPONSE order #' . $postId . ' | response=' . wp_json_encode( $answer ), $postId );
 
         if ( is_wp_error( $answer ) ) {
             $errorMsg = $answer->get_error_message();
             $order->update_meta_data( 'yd_error', 'Ошибка подтверждения: ' . $errorMsg );
             $order->save();
-            error_log( '[YD] confirm_request error for order #' . $postId . ': ' . $errorMsg );
+            yd_log( 'CONFIRM ERROR order #' . $postId . ': ' . $errorMsg, $postId );
             return;
         }
 
