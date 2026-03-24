@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.6.1
+Version: 2.6.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1966,6 +1966,17 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
     }
 
+    /**
+     * Формирует source для API — либо platform_station_id, либо address (не оба).
+     */
+    function yd_build_source( $sourceAddress, $pointForParcelName ) {
+        $stationId = $pointForParcelName ? getReceptionPointCodeByName( $pointForParcelName ) : '';
+        if ( ! empty( $stationId ) ) {
+            return array( 'platform_station_id' => $stationId );
+        }
+        return array( 'address' => $sourceAddress );
+    }
+
     function yd_get_tracking_code( $postId )
     {
         $order = wc_get_order( $postId );
@@ -2117,10 +2128,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'operator_request_id' => $orderIdForApi,
                     'comment'             => sprintf( 'WooCommerce заказ #%s', $order->get_order_number() ),
                 ),
-                'source' => array(
-                    'address'   => $sourceAddress,
-                    'platform_station_id' => getReceptionPointCodeByName( $pointForParcelName ) ?: '',
-                ),
+                'source' => yd_build_source( $sourceAddress, $pointForParcelName ),
                 'destination' => array(
                     'address'    => $destinationAddress,
                     'type'       => $isSelfPickup ? 'pickup_point' : 'door',
