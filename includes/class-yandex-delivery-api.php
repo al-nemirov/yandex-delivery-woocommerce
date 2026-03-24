@@ -123,9 +123,11 @@ class Yandex_Delivery_API {
      * @param array  $dimensions              ['length' => cm, 'width' => cm, 'height' => cm]
      * @param string $source_station_id       platform_station_id склада (из yd_reception_points)
      * @param string $destination_station_id  platform_station_id ПВЗ (из yd_pvz_code cookie)
+     * @param array|null $places_custom       Если задан непустой массив — тело pricing-calculator получает эти places
+     *                                        (несколько грузомест), total_weight = сумма весов мест; $dimensions не используются.
      * @return array|WP_Error
      */
-    public function calculate_price( $source_address, $destination_address, $tariff, $weight_grams, $assessed_price, $dimensions = array(), $source_station_id = '', $destination_station_id = '' ) {
+    public function calculate_price( $source_address, $destination_address, $tariff, $weight_grams, $assessed_price, $dimensions = array(), $source_station_id = '', $destination_station_id = '', $places_custom = null ) {
         $dx = isset( $dimensions['length'] ) ? (int) $dimensions['length'] : 10;
         $dy = isset( $dimensions['width'] )  ? (int) $dimensions['width']  : 10;
         $dz = isset( $dimensions['height'] ) ? (int) $dimensions['height'] : 10;
@@ -146,22 +148,28 @@ class Yandex_Delivery_API {
             $destination['address'] = $destination_address;
         }
 
+        if ( is_array( $places_custom ) && ! empty( $places_custom ) ) {
+            $places_body = $places_custom;
+        } else {
+            $places_body = array(
+                array(
+                    'physical_dims' => array(
+                        'dx'           => $dx,
+                        'dy'           => $dy,
+                        'dz'           => $dz,
+                        'weight_gross' => (int) $weight_grams,
+                    ),
+                ),
+            );
+        }
+
         $body = array(
             'source'               => $source,
             'destination'          => $destination,
             'tariff'               => $tariff,
             'total_assessed_price' => (int) $assessed_price,
             'total_weight'         => (int) $weight_grams,
-            'places'               => array(
-                array(
-                    'physical_dims' => array(
-                        'dx'          => $dx,
-                        'dy'          => $dy,
-                        'dz'          => $dz,
-                        'weight_gross' => (int) $weight_grams,
-                    ),
-                ),
-            ),
+            'places'               => $places_body,
         );
 
         // Log request/response only when WP_DEBUG is on; mask addresses to protect PII in prod

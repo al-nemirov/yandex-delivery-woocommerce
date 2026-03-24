@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.7.0
+Version: 2.8.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -304,6 +304,168 @@ function yd_calculate_package_dims( $products, $opts ) {
     }
 
     return $pack;
+}
+
+/**
+ * Схлопывает однотипные позиции внутри одного грузоместа после поштучной укладки.
+ *
+ * @param array $chunks Список [ 'product' => WC_Product, 'variation_id' => int, 'quantity' => int ]
+ * @return array
+ */
+function yd_merge_package_product_chunks( $chunks ) {
+    $acc = array();
+    foreach ( $chunks as $ch ) {
+        $pid = (int) $ch['product']->get_id();
+        $vid = (int) $ch['variation_id'];
+        $key = $pid . '_' . $vid;
+        if ( ! isset( $acc[ $key ] ) ) {
+            $acc[ $key ] = array(
+                'product'      => $ch['product'],
+                'variation_id' => $vid,
+                'quantity'     => 0,
+            );
+        }
+        $acc[ $key ]['quantity'] += (int) $ch['quantity'];
+    }
+    return array_values( $acc );
+}
+
+/**
+ * Дробит набор товаров на несколько грузомест по максимальному весу одного места (г).
+ * Жадная укладка поштучно; одна единица тяжелее лимита — false.
+ *
+ * @param array $packageProducts См. yd_calculate_package_dims
+ * @param int   $max_place_weight_g
+ * @param float $default_weight
+ * @return array<int, array>|false Сегменты (каждый — массив для yd_calculate_package_dims)
+ */
+function yd_split_package_products_by_place_weight( $packageProducts, $max_place_weight_g, $default_weight ) {
+    if ( empty( $packageProducts ) ) {
+        return array();
+    }
+    if ( $max_place_weight_g <= 0 ) {
+        return array( $packageProducts );
+    }
+
+    $weight_c = yd_unit_coefficients()['weight_c'];
+    $lines    = array();
+
+    foreach ( $packageProducts as $entry ) {
+        $qty = max( 0, (int) $entry['quantity'] );
+        if ( $qty < 1 ) {
+            continue;
+        }
+        $vid = isset( $entry['variation_id'] ) ? (int) $entry['variation_id'] : 0;
+        $raw = (float) bxbGetWeight( $entry['product'], $vid ) * $weight_c;
+        $uw  = $raw <= 0 ? (int) ceil( (float) $default_weight ) : (int) ceil( $raw );
+        if ( $uw > $max_place_weight_g ) {
+            return false;
+        }
+        $lines[] = array(
+            'product'      => $entry['product'],
+            'variation_id' => $vid,
+            'quantity'     => $qty,
+            'unit_w'       => $uw,
+        );
+    }
+
+    if ( empty( $lines ) ) {
+        return array();
+    }
+
+    $places_out = array();
+    $cur        = array();
+    $cur_w      = 0;
+
+    foreach ( $lines as $line ) {
+        for ( $n = 0; $n < (int) $line['quantity']; $n++ ) {
+            if ( $cur_w + $line['unit_w'] > $max_place_weight_g && ! empty( $cur ) ) {
+                $places_out[] = yd_merge_package_product_chunks( $cur );
+                $cur          = array();
+                $cur_w        = 0;
+            }
+            $lc = count( $cur );
+            if ( $lc > 0 ) {
+                $last = &$cur[ $lc - 1 ];
+                if ( (int) $last['product']->get_id() === (int) $line['product']->get_id()
+                    && (int) $last['variation_id'] === (int) $line['variation_id'] ) {
+                    $last['quantity']++;
+                    $cur_w += $line['unit_w'];
+                    continue;
+                }
+            }
+            $cur[] = array(
+                'product'      => $line['product'],
+                'variation_id' => $line['variation_id'],
+                'quantity'     => 1,
+            );
+            $cur_w += $line['unit_w'];
+        }
+    }
+
+    if ( ! empty( $cur ) ) {
+        $places_out[] = yd_merge_package_product_chunks( $cur );
+    }
+
+    return $places_out;
+}
+
+/**
+ * Строит массив places для pricing-calculator / контроль габаритов по сегментам.
+ *
+ * @param array $segments Список сегментов (массивов товаров)
+ * @param array $dimOpts  Опции для yd_calculate_package_dims
+ * @return array{places: array, total_weight: int}|false
+ */
+function yd_build_places_payload_from_segments( $segments, $dimOpts ) {
+    $places       = array();
+    $total_weight = 0;
+    foreach ( $segments as $seg ) {
+        $dims = yd_calculate_package_dims( $seg, $dimOpts );
+        if ( $dims === false ) {
+            return false;
+        }
+        $w = (int) $dims['weight'];
+        $total_weight += $w;
+        $places[] = array(
+            'physical_dims' => array(
+                'weight_gross' => $w,
+                'dx'           => max( 1, (int) $dims['depth'] ),
+                'dy'           => max( 1, (int) $dims['width'] ),
+                'dz'           => max( 1, (int) $dims['height'] ),
+            ),
+        );
+    }
+    if ( empty( $places ) ) {
+        return false;
+    }
+    return array(
+        'places'       => $places,
+        'total_weight' => $total_weight,
+    );
+}
+
+/**
+ * Находит позицию заказа WC по товару из сегмента (совпадение ID вариации/продукта).
+ *
+ * @param WC_Order_Item_Product[] $orderItems
+ * @return WC_Order_Item_Product|null
+ */
+function yd_find_order_item_for_segment_product( $orderItems, $product ) {
+    if ( ! $product ) {
+        return null;
+    }
+    $pid = (int) $product->get_id();
+    foreach ( $orderItems as $oi ) {
+        if ( ! $oi instanceof WC_Order_Item_Product ) {
+            continue;
+        }
+        $op = $oi->get_product();
+        if ( $op && (int) $op->get_id() === $pid ) {
+            return $oi;
+        }
+    }
+    return null;
 }
 
 add_action( 'plugins_loaded', 'yd_load_textdomain' );
@@ -885,7 +1047,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'default'           => '0',
                     ),
                     'max_weight'                          => array(
-                        'title'             => 'Макс. вес (г)',
+                        'title'             => 'Макс. вес одного грузоместа (г)',
+                        'description'       => 'Тяжёлый заказ автоматически делится на несколько посылок в Яндекс Доставке. Одна единица товара тяжелее этого значения — доставка недоступна. 0 = без дробления по весу.',
+                        'desc_tip'          => true,
                         'type'              => 'text',
                         'default'           => '31000',
                     ),
@@ -1255,7 +1419,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'variation_id' => isset( $cartProduct['variation_id'] ) ? $cartProduct['variation_id'] : 0,
                     );
                 }
-                $fullPackage = yd_calculate_package_dims( $cartProducts, array(
+                $dimOpts = array(
                     'default_weight'           => $defaultWeight,
                     'default_height'           => $defaultHeight,
                     'default_depth'            => $defaultDepth,
@@ -1265,22 +1429,38 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'max_height'               => $maxHeight,
                     'max_depth'                => $maxDepth,
                     'max_width'                => $maxWidth,
-                ) );
-                if ( $fullPackage === false ) {
+                );
+
+                $maxPlaceW = (int) $maxWeight;
+                if ( (int) $applyDefaultDimensions === 2 || $maxPlaceW <= 0 ) {
+                    $segments = array( $cartProducts );
+                } else {
+                    $segments = yd_split_package_products_by_place_weight( $cartProducts, $maxPlaceW, $defaultWeight );
+                    if ( $segments === false ) {
+                        error_log( sprintf( '[YD] Item heavier than max place weight %dg — method %s hidden', $maxPlaceW, $this->id ) );
+                        return false;
+                    }
+                }
+
+                $segments = array_values( array_filter( $segments, function ( $seg ) {
+                    return is_array( $seg ) && ! empty( $seg );
+                } ) );
+                if ( empty( $segments ) ) {
                     return false;
                 }
 
-                // P2 Fix: логируем предупреждение при выходе за пределы веса (вместо молчаливого пропуска)
-                if ( $fullPackage['weight'] < $minWeight ) {
-                    error_log( sprintf( '[YD] Package weight %dg is below min_weight %dg for method %s — rate hidden', $fullPackage['weight'], $minWeight, $this->id ) );
-                }
-                if ( $fullPackage['weight'] > $maxWeight ) {
-                    error_log( sprintf( '[YD] Package weight %dg exceeds max_weight %dg for method %s — rate hidden', $fullPackage['weight'], $maxWeight, $this->id ) );
+                $payload = yd_build_places_payload_from_segments( $segments, $dimOpts );
+                if ( $payload === false ) {
+                    return false;
                 }
 
-                if ( $minWeight <= $fullPackage['weight'] && $maxWeight >= $fullPackage['weight'] ) {
-                    $city  = $package['destination']['city'];
-                    $state = $package['destination']['state'];
+                if ( $payload['total_weight'] < $minWeight ) {
+                    error_log( sprintf( '[YD] Package weight %dg is below min_weight %dg for method %s — rate hidden', $payload['total_weight'], $minWeight, $this->id ) );
+                    return false;
+                }
+
+                $city  = $package['destination']['city'];
+                $state = $package['destination']['state'];
 
                     if ( empty( $package['destination']['state'] ) ) {
                         $location_data = $this->extract_city_and_state( $package['destination']['city'] );
@@ -1346,21 +1526,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     }
                     $assessedPrice = yd_assessed_price_minor_units( $qualifiedCartItems, 'cart' );
 
-                    $dimensions = array(
-                        'length' => max( 1, (int) $fullPackage['depth'] ),
-                        'width'  => max( 1, (int) $fullPackage['width'] ),
-                        'height' => max( 1, (int) $fullPackage['height'] ),
-                    );
-
                     // Кэш в рамках одного запроса — yd_self и yd_self_after
                     // не дублируют API-вызов если параметры одинаковые
                     $cacheKey = md5( wp_json_encode( array(
                         $sourceStationId ?: $sourceAddress,
                         $destinationStationId ?: $destinationAddress,
                         $tariff,
-                        (int) $fullPackage['weight'],
+                        (int) $payload['total_weight'],
                         $assessedPrice,
-                        $dimensions,
+                        $payload['places'],
                     ) ) );
 
                     if ( ! isset( $GLOBALS['yd_pricing_cache'][ $cacheKey ] ) ) {
@@ -1369,8 +1543,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                             error_log( '[YD] === CALC REQUEST (' . $this->id . ') ===' );
                             error_log( '[YD] source_station=' . ( $sourceStationId ?: 'N/A' ) );
                             error_log( '[YD] dest_station=' . ( $destinationStationId ?: 'N/A' ) );
-                            error_log( '[YD] tariff=' . $tariff . ', weight=' . (int) $fullPackage['weight'] . 'g' );
-                            error_log( '[YD] dims: L=' . $dimensions['length'] . ' W=' . $dimensions['width'] . ' H=' . $dimensions['height'] . ' cm' );
+                            error_log( '[YD] tariff=' . $tariff . ', total_weight=' . (int) $payload['total_weight'] . 'g, places=' . count( $payload['places'] ) );
                             error_log( '[YD] assessed_price=' . $assessedPrice . ' kopecks (' . round( $assessedPrice / 100, 2 ) . ' RUB)' );
                         }
 
@@ -1378,11 +1551,12 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                             $sourceAddress,
                             $destinationAddress,
                             $tariff,
-                            (int) $fullPackage['weight'],
+                            (int) $payload['total_weight'],
                             $assessedPrice,
-                            $dimensions,
+                            array(),
                             $sourceStationId,
-                            $destinationStationId
+                            $destinationStationId,
+                            $payload['places']
                         );
                     } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[YD] === CALC CACHED (' . $this->id . ') === reusing result from previous method' );
@@ -1435,7 +1609,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'label' => ( $this->title . $deliveryPeriod ),
                         'cost'  => $finalCost,
                     ] );
-                }
 
                 return false;
             }
@@ -2051,10 +2224,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $customerEmail = $order->get_billing_email();
             }
 
-            // Собираем товары и вычисляем вес/габариты
-            $orderItems   = $order->get_items( 'line_item' );
-            $declaredCost = 0;
-            $items_list   = array();
+            // Собираем товары, дробим на грузоместа по весу (как на чекауте), считаем габариты каждого места
+            $orderItems = $order->get_items( 'line_item' );
 
             $defaultWeight          = (float) $shippingData['object']->get_option( 'default_weight' );
             $defaultHeight          = (int) $shippingData['object']->get_option( 'default_height' );
@@ -2062,39 +2233,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $defaultWidth           = (int) $shippingData['object']->get_option( 'default_width' );
             $applyDefaultDimensions = (int) $shippingData['object']->get_option( 'apply_default_dimensions' );
             $minWeight              = (float) $shippingData['object']->get_option( 'min_weight' );
+            $maxPlaceW              = (int) $shippingData['object']->get_option( 'max_weight' );
 
-            foreach ( $orderItems as $orderItem ) {
-                $product = $orderItem->get_product();
-
-                if ( ! $product || $product->is_virtual() || $product->is_downloadable() ) {
-                    continue;
-                }
-
-                // declaredCost больше не используется для assessed_price, но нужен для payment_sum
-                $declaredCost += (float) $orderItem->get_total() + (float) $orderItem->get_total_tax();
-
-                $sku = is_callable( array( $product, 'get_sku' ) ) ? $product->get_sku() : '';
-                $id  = (string) ( $sku !== '' ? $sku : $orderItem['product_id'] );
-
-                $unitPriceRub = round( ( (float) $orderItem->get_total() + (float) $orderItem->get_total_tax() ) / $orderItem->get_quantity(), 2 );
-                $unitPriceKopecks = (int) round( $unitPriceRub * 100 );
-
-                $items_list[] = array(
-                    'article'    => $id,
-                    'name'       => $orderItem['name'],
-                    'price'      => $unitPriceRub,
-                    'count'      => $orderItem->get_quantity(),
-                    'weight'     => 0,
-                    'billing_details' => array(
-                        'unit_price'          => $unitPriceKopecks,
-                        'assessed_unit_price' => $unitPriceKopecks,
-                        'nds'                 => -1, // без НДС (УСН)
-                    ),
-                );
-
-            }
-
-            // P0 Fix: единая функция габаритов (стопка), как в calculate_shipping
             $packageProducts = array();
             foreach ( $orderItems as $orderItem ) {
                 $product = $orderItem->get_product();
@@ -2107,18 +2247,90 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'variation_id' => $orderItem->get_variation_id(),
                 );
             }
-            $fullPackage = yd_calculate_package_dims( $packageProducts, array(
+
+            $dimOptsOrder = array(
                 'default_weight'           => $defaultWeight,
                 'default_height'           => $defaultHeight,
                 'default_depth'            => $defaultDepth,
                 'default_width'            => $defaultWidth,
                 'apply_default_dimensions' => $applyDefaultDimensions,
                 'min_weight'               => $minWeight,
-            ) );
-            if ( $fullPackage === false ) {
+            );
+
+            if ( (int) $applyDefaultDimensions === 2 || $maxPlaceW <= 0 ) {
+                $segments = array( $packageProducts );
+            } else {
+                $segments = yd_split_package_products_by_place_weight( $packageProducts, $maxPlaceW, $defaultWeight );
+                if ( $segments === false ) {
+                    $order->update_meta_data( 'yd_error', 'Позиция тяжелее максимально допустимого веса одного грузоместа (' . $maxPlaceW . ' г). Разбейте заказ или увеличьте лимит в настройках доставки.' );
+                    $order->save();
+                    return;
+                }
+            }
+
+            $segments = array_values( array_filter( $segments, function ( $seg ) {
+                return is_array( $seg ) && ! empty( $seg );
+            } ) );
+            if ( empty( $segments ) ) {
+                $order->update_meta_data( 'yd_error', 'Нет товаров для отправки в Яндекс Доставку' );
+                $order->save();
+                return;
+            }
+
+            $placesPayload = yd_build_places_payload_from_segments( $segments, $dimOptsOrder );
+            if ( $placesPayload === false ) {
                 $order->update_meta_data( 'yd_error', 'Превышены лимиты габаритов посылки' );
                 $order->save();
                 return;
+            }
+
+            $orderIdInt = (int) $order->get_id();
+            $numSeg     = count( $segments );
+            $items_list = array();
+
+            foreach ( $segments as $segIndex => $seg ) {
+                $barcode = ( 1 === $numSeg ) ? 'WC' . $orderIdInt : 'WC' . $orderIdInt . '-' . ( $segIndex + 1 );
+                foreach ( $seg as $entry ) {
+                    $oi = yd_find_order_item_for_segment_product( $orderItems, $entry['product'] );
+                    if ( ! $oi ) {
+                        continue;
+                    }
+                    $product = $entry['product'];
+                    $sku     = is_callable( array( $product, 'get_sku' ) ) ? $product->get_sku() : '';
+                    $id      = (string) ( $sku !== '' ? $sku : $oi['product_id'] );
+                    $lineQty = max( 1, (int) $oi->get_quantity() );
+                    $unitPriceRub     = round( ( (float) $oi->get_total() + (float) $oi->get_total_tax() ) / $lineQty, 2 );
+                    $unitPriceKopecks = (int) round( $unitPriceRub * 100 );
+
+                    $items_list[] = array(
+                        'article'         => $id,
+                        'name'            => $oi->get_name(),
+                        'price'           => $unitPriceRub,
+                        'count'           => (int) $entry['quantity'],
+                        'weight'          => 0,
+                        'place_barcode'   => $barcode,
+                        'billing_details' => array(
+                            'unit_price'          => $unitPriceKopecks,
+                            'assessed_unit_price' => $unitPriceKopecks,
+                            'nds'                 => -1, // без НДС (УСН)
+                        ),
+                    );
+                }
+            }
+
+            if ( empty( $items_list ) ) {
+                $order->update_meta_data( 'yd_error', 'Не удалось сопоставить товары заказа с грузоместами для Яндекс Доставки' );
+                $order->save();
+                return;
+            }
+
+            $places_api = array();
+            foreach ( $placesPayload['places'] as $pi => $plEntry ) {
+                $barcode = ( 1 === $numSeg ) ? 'WC' . $orderIdInt : 'WC' . $orderIdInt . '-' . ( $pi + 1 );
+                $places_api[] = array_merge(
+                    array( 'barcode' => $barcode ),
+                    $plEntry
+                );
             }
 
             // Определяем адрес отправления
@@ -2181,17 +2393,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'phone'      => $customerPhone,
                     'email'      => $customerEmail,
                 ),
-                'items' => $items_list,
-                'places' => array(
-                    array(
-                        'physical_dims' => array(
-                            'weight_gross' => (int) $fullPackage['weight'],
-                            'dx'           => max( 1, (int) $fullPackage['depth'] ),
-                            'dy'           => max( 1, (int) $fullPackage['width'] ),
-                            'dz'           => max( 1, (int) $fullPackage['height'] ),
-                        ),
-                    ),
-                ),
+                'items'  => $items_list,
+                'places' => $places_api,
                 'last_mile_policy' => $isSelfPickup ? 'self_pickup' : 'time_interval',
             );
 
