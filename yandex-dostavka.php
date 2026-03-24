@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.5.0
+Version: 2.5.1
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -740,45 +740,26 @@ function yd_sync_single_order_status( $postId ) {
 function yd_log( $message, $order_id = null, $key = null ) {
     $debug_enabled = false;
 
-    if ( $key === null ) {
-        // Если ключ не передан — проверяем по заказу
-        if ( $order_id ) {
-            $order = wc_get_order( $order_id );
-            if ( $order ) {
-                $shippingData = bxbGetShippingData( $order );
-                if ( isset( $shippingData['object'] ) ) {
-                    $debug_enabled = $shippingData['object']->get_option( 'debug_mode' ) === '1';
-                }
-            }
-        }
-    } else {
-        // Ищем debug_mode среди всех yd-методов
-        $methods = WC()->shipping()->get_shipping_methods();
-        foreach ( $methods as $method ) {
-            if ( $method instanceof WC_YD_Parent_Method && $method->get_option( 'key' ) === $key ) {
-                $debug_enabled = $method->get_option( 'debug_mode' ) === '1';
-                break;
-            }
-        }
-    }
-
-    if ( ! $debug_enabled && ! ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) {
-        return;
-    }
-
-    error_log( '[YD DEBUG] ' . $message );
-
-    // Сохраняем лог в мету заказа (последние 50 записей)
+    // Проверяем debug_mode по заказу
     if ( $order_id ) {
+        $debug_enabled = yd_is_debug( $order_id );
+    }
+
+    // Всегда пишем в error_log при WP_DEBUG или debug_mode
+    if ( $debug_enabled || ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) {
+        error_log( '[YD DEBUG] ' . $message );
+    }
+
+    // Всегда сохраняем лог в мету заказа если есть order_id и debug включён
+    if ( $order_id && $debug_enabled ) {
         $order = wc_get_order( $order_id );
-        if ( $order && $debug_enabled ) {
+        if ( $order ) {
             $log = $order->get_meta( 'yd_debug_log' );
             $entries = $log ? json_decode( $log, true ) : array();
             if ( ! is_array( $entries ) ) {
                 $entries = array();
             }
             $entries[] = current_time( 'Y-m-d H:i:s' ) . ' — ' . $message;
-            // Ограничиваем 50 записями
             if ( count( $entries ) > 50 ) {
                 $entries = array_slice( $entries, -50 );
             }
@@ -1855,6 +1836,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     }
 
     add_action( 'woocommerce_process_shop_order_meta', 'yd_meta_tracking_code', 0, 2 );
+    // HPOS (WC 7+): обработка кнопок в мета-боксе при сохранении заказа
+    add_action( 'woocommerce_update_order', 'yd_meta_tracking_code', 0, 2 );
 
     function bxbCreateAct( $postId )
     {
@@ -2074,7 +2057,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 'total_weight'         => (int) $fullPackage['weight'],
                 'tariff'               => $isSelfPickup ? 'self_pickup' : 'time_interval',
                 'delivery_cost'        => (float) $shippingData['cost'],
-                'auto_accept'          => false,
             );
 
             if ( $isSelfPickup && ! empty( $yd_code ) ) {
