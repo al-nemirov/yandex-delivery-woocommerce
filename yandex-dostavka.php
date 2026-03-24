@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.3.0
+Version: 2.4.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -640,12 +640,21 @@ function yd_sync_order_statuses() {
         }
 
         $statusName = isset( $result['state']['description'] ) ? $result['state']['description'] : ( isset( $result['state']['status'] ) ? $result['state']['status'] : '' );
+        $statusCode = isset( $result['state']['status'] ) ? $result['state']['status'] : '';
         $statusDate = isset( $result['state']['updated_ts'] ) ? date( 'd.m.Y H:i', strtotime( $result['state']['updated_ts'] ) ) : current_time( 'd.m.Y H:i' );
         $storedStatus = $order->get_meta( 'yd_last_status' );
+
+        // Сохраняем полную историю трекинга из API
+        $history = $yd_client->get_request_history( $trackingNumber );
+        if ( ! is_wp_error( $history ) && ! empty( $history['history'] ) ) {
+            $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $history['history'] ) );
+        }
+        $order->update_meta_data( 'yd_last_sync', current_time( 'd.m.Y H:i:s' ) );
 
         // Если статус изменился — записываем
         if ( $storedStatus !== $statusName ) {
             $order->update_meta_data( 'yd_last_status', $statusName );
+            $order->update_meta_data( 'yd_last_status_code', $statusCode );
             $order->update_meta_data( 'yd_last_status_date', $statusDate );
             $order->add_order_note(
                 sprintf( 'Яндекс Доставка: %s (%s)', $statusName, $statusDate ),
@@ -656,13 +665,68 @@ function yd_sync_order_statuses() {
             // Авто-завершение при вручении (если включено в настройках)
             $autoComplete = $shippingData['object']->get_option( 'auto_complete_on_delivery', '0' );
             if ( $autoComplete === '1' && yd_is_delivered_status( $statusName ) ) {
-                // update_status() вызывает save() внутри себя
                 $order->update_status( 'completed', 'Заказ автоматически завершён: посылка вручена получателю.' );
             } else {
                 $order->save();
             }
+        } else {
+            $order->save();
         }
     }
+}
+
+/**
+ * Ручная синхронизация статуса одного заказа (кнопка в мета-боксе).
+ */
+function yd_sync_single_order_status( $postId ) {
+    $order = wc_get_order( $postId );
+    if ( ! $order ) {
+        return;
+    }
+    $trackingNumber = $order->get_meta( 'yd_tracking_number' );
+    if ( empty( $trackingNumber ) ) {
+        return;
+    }
+    $shippingData = bxbGetShippingData( $order );
+    if ( ! isset( $shippingData['object'] ) ) {
+        return;
+    }
+    $key = $shippingData['object']->get_option( 'key' );
+    if ( empty( $key ) ) {
+        return;
+    }
+
+    $yd_client = new Yandex_Delivery_API( $key );
+
+    // Сохраняем историю
+    $history = $yd_client->get_request_history( $trackingNumber );
+    if ( ! is_wp_error( $history ) && ! empty( $history['history'] ) ) {
+        $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $history['history'] ) );
+    }
+
+    // Сохраняем текущий статус
+    $result = $yd_client->get_request_info( $trackingNumber );
+    if ( ! is_wp_error( $result ) && isset( $result['state'] ) ) {
+        $statusName = isset( $result['state']['description'] ) ? $result['state']['description'] : ( isset( $result['state']['status'] ) ? $result['state']['status'] : '' );
+        $statusCode = isset( $result['state']['status'] ) ? $result['state']['status'] : '';
+        $statusDate = isset( $result['state']['updated_ts'] ) ? date( 'd.m.Y H:i', strtotime( $result['state']['updated_ts'] ) ) : current_time( 'd.m.Y H:i' );
+        $storedStatus = $order->get_meta( 'yd_last_status' );
+
+        $order->update_meta_data( 'yd_last_status', $statusName );
+        $order->update_meta_data( 'yd_last_status_code', $statusCode );
+        $order->update_meta_data( 'yd_last_status_date', $statusDate );
+
+        if ( $storedStatus !== $statusName ) {
+            $order->add_order_note(
+                sprintf( 'Яндекс Доставка: %s (%s)', $statusName, $statusDate ),
+                false,
+                true
+            );
+        }
+    }
+
+    $order->update_meta_data( 'yd_last_sync', current_time( 'd.m.Y H:i:s' ) );
+    $order->save();
 }
 
 /**
@@ -1584,8 +1648,41 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p><input type="submit" class="add_note button" name="yd_create_act" value="Сформировать акт"></p>';
                 }
 
-                echo '<p>Текущий статус заказа в Яндекс Доставке:</p>';
-                echo bxbGetLastStatusInOrder( $orderData );
+                // Показываем сохранённый трекинг из меты (без лишних API-запросов)
+                $lastStatus = $order->get_meta( 'yd_last_status' );
+                $lastStatusDate = $order->get_meta( 'yd_last_status_date' );
+                $lastSync = $order->get_meta( 'yd_last_sync' );
+                $savedHistory = $order->get_meta( 'yd_tracking_history' );
+
+                if ( $savedHistory ) {
+                    $historyItems = json_decode( $savedHistory, true );
+                    if ( is_array( $historyItems ) && ! empty( $historyItems ) ) {
+                        echo '<p><strong>История доставки:</strong></p>';
+                        echo '<div><ul class="order_notes" style="max-height: 300px; overflow-y: auto;">';
+                        $items = array_reverse( $historyItems );
+                        foreach ( $items as $idx => $status ) {
+                            $sName = isset( $status['description'] ) ? $status['description'] : ( isset( $status['status'] ) ? $status['status'] : '' );
+                            $sDate = isset( $status['timestamp'] ) ? date( 'd.m.Y H:i', strtotime( $status['timestamp'] ) ) : '';
+                            $noteClass = ( $idx === 0 ) ? 'note system-note' : 'note';
+                            echo '<li class="' . $noteClass . '"><div class="note_content"><p>' . esc_html( $sName ) . '</p></div><p class="meta"><abbr class="exact-date">' . esc_html( $sDate ) . '</abbr></p></li>';
+                        }
+                        echo '</ul></div>';
+                    }
+                } elseif ( $lastStatus ) {
+                    echo '<p><strong>Статус:</strong> ' . esc_html( $lastStatus ) . '</p>';
+                    if ( $lastStatusDate ) {
+                        echo '<p><small>' . esc_html( $lastStatusDate ) . '</small></p>';
+                    }
+                } else {
+                    // Фоллбэк: первый запрос ещё не прошёл — показываем из API
+                    echo '<p>Текущий статус заказа в Яндекс Доставке:</p>';
+                    echo bxbGetLastStatusInOrder( $orderData );
+                }
+
+                if ( $lastSync ) {
+                    echo '<p><small style="color:#999;">Синхронизация: ' . esc_html( $lastSync ) . '</small></p>';
+                }
+                echo '<p><input type="submit" class="button" name="yd_refresh_status" value="Обновить статус"></p>';
             } else {
                 if ( $shippingData['object']->self_type ) {
                     if ( $pvzCode === '' ) {
@@ -1626,6 +1723,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         if ( isset( $_POST['yd_confirm_parsel'] ) ) {
             if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
                 yd_confirm_order( $postId );
+            }
+        }
+        if ( isset( $_POST['yd_refresh_status'] ) ) {
+            if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
+                yd_sync_single_order_status( $postId );
             }
         }
         if ( isset( $_POST['yd_create_act'] ) ) {
