@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.8.0
+Version: 2.8.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -466,6 +466,23 @@ function yd_find_order_item_for_segment_product( $orderItems, $product ) {
         }
     }
     return null;
+}
+
+/**
+ * Оплата при получении для заявки в Яндекс Доставке и для текста в метабоксе.
+ * Доставка с суффиксом *_after ИЛИ стандартный наложенный платёж WooCommerce (cod).
+ *
+ * @param WC_Order $order
+ * @param string   $yd_method_id method_id из bxbGetShippingData (yd_self, yd_self_after, …).
+ */
+function yd_order_is_pay_on_receipt_for_yd_api( $order, $yd_method_id ) {
+    if ( ! $order instanceof WC_Order ) {
+        return false;
+    }
+    if ( is_string( $yd_method_id ) && strpos( $yd_method_id, '_after' ) !== false ) {
+        return true;
+    }
+    return $order->get_payment_method() === 'cod';
 }
 
 add_action( 'plugins_loaded', 'yd_load_textdomain' );
@@ -1899,11 +1916,10 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 echo '<p><span style="display: inline-block;">Номер отправления:</span>';
                 echo '<span style="margin-left: 10px"><b>' . esc_html( $trackingNumber ) . '</b></span>';
 
-                // Способ оплаты
-                $isCodMethod = ( strpos( $shippingData['method_id'], '_after' ) !== false );
+                // Способ оплаты (та же логика, что и billing_info в request/create)
                 $paymentMethod = $order->get_payment_method();
                 $paymentTitle  = $order->get_payment_method_title();
-                if ( $isCodMethod || $paymentMethod === 'cod' ) {
+                if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
                     echo '<p style="color:#b26200;margin:4px 0;">&#128176; ' . esc_html( $paymentTitle ) . ' — <strong>' . wc_price( $order->get_total() ) . '</strong></p>';
                 } else {
                     echo '<p style="color:#059377;margin:4px 0;">&#9989; ' . esc_html( $paymentTitle ) . '</p>';
@@ -1999,7 +2015,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p>Адрес пункта выдачи: ' . esc_html( $yd_address ) . '</p>';
                 }
                 // Информация об оплате
-                $isCodMethod = ( strpos( $shippingData['method_id'], '_after' ) !== false );
                 $paymentMethod = $order->get_payment_method();
                 $paymentTitle  = $order->get_payment_method_title();
                 $orderTotal    = $order->get_total();
@@ -2007,7 +2022,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 echo '<hr style="margin:8px 0;">';
                 echo '<p><strong>Оплата:</strong> ' . esc_html( $paymentTitle ?: $paymentMethod ) . '</p>';
-                if ( $isCodMethod || $paymentMethod === 'cod' ) {
+                if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
                     echo '<p style="color:#b26200;">&#128176; Оплата при получении</p>';
                     echo '<p>Сумма к оплате клиентом: <strong>' . wc_price( $orderTotal ) . '</strong></p>';
                     echo '<p><small>Товары: ' . wc_price( $orderTotal - $shippingCost ) . ' + Доставка: ' . wc_price( $shippingCost ) . '</small></p>';
@@ -2339,9 +2354,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
             // Определяем адрес назначения и тип доставки
             $isSelfPickup = ( strpos( $shippingData['method_id'], 'yd_self' ) !== false );
-            // Как в метабоксе: наложенный платёж = доставка *_after ИЛИ способ оплаты WC cod
-            $isCod = ( strpos( $shippingData['method_id'], '_after' ) !== false )
-                || ( $order->get_payment_method() === 'cod' );
+            $isCod = yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] );
 
             if ( $isSelfPickup ) {
                 $yd_code = $order->get_meta( 'yd_code' );
