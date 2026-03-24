@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.10.1
+Version: 2.10.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1893,7 +1893,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
             if ( isset( $errorText ) && empty( $trackingNumber ) && $errorText !== '' ) {
                 echo '<p><b><u>Возникла ошибка</u></b>: ' . wp_kses_post( $errorText ) . '</p>';
-                echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Попробовать снова"></p>';
+                echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Попробовать снова" title="Повторно отправить заказ в Яндекс Доставку. Предыдущая попытка завершилась ошибкой."></p>';
 
                 // Дебаг-лог при ошибке
                 if ( yd_is_debug( $order_id ) ) {
@@ -1935,21 +1935,21 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 }
 
                 if ( ! empty( $labelLink ) ) {
-                    echo '<p><a class="button" href="' . esc_url( $labelLink ) . '" target="_blank">Скачать этикетку</a></p>';
+                    echo '<p><a class="button" href="' . esc_url( $labelLink ) . '" target="_blank" title="Скачать PDF-этикетку для наклейки на посылку. Откроется в новой вкладке.">Скачать этикетку &#10067;</a></p>';
                 }
 
                 if ( isset( $actLink ) && $actLink !== '' ) {
-                    echo '<p><a class="button" href="' . esc_url( $actLink ) . '" target="_blank">Скачать акт</a></p>';
+                    echo '<p><a class="button" href="' . esc_url( $actLink ) . '" target="_blank" title="Скачать акт приёма-передачи. Нужен при сдаче посылки в пункт приёма.">Скачать акт &#10067;</a></p>';
                 }
 
                 if ( empty( $actLink ) ) {
-                    echo '<p><input type="submit" class="add_note button" name="yd_create_act" value="Сформировать акт"></p>';
+                    echo '<p><input type="submit" class="add_note button" name="yd_create_act" value="Сформировать акт" title="Сгенерировать акт приёма-передачи в Яндекс Доставке. Нужен при сдаче посылки в пункт приёма."></p>';
                 }
 
                 // Сброс (настройка show_reset_button)
                 if ( $shippingData['object']->get_option( 'show_reset_button' ) === '1' ) {
                     echo '<hr style="margin:8px 0;">';
-                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Сброс статуса" onclick="return confirm(\'Сбросить данные ЯД? Старую заявку нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;"></p>';
+                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Сброс статуса" onclick="return confirm(\'Сбросить данные ЯД? Старую заявку нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Удалить все данные Яндекс Доставки из этого заказа и создать заявку заново. ВАЖНО: старую заявку нужно отменить в личном кабинете ЯД вручную!"></p>';
                 }
 
                 // Показываем сохранённый трекинг из меты (без лишних API-запросов)
@@ -1984,7 +1984,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 if ( $lastSync ) {
                     echo '<p><small style="color:#999;">Синхронизация: ' . esc_html( $lastSync ) . '</small></p>';
                 }
-                echo '<p><input type="submit" class="button" name="yd_refresh_status" value="Обновить статус"></p>';
+                echo '<p><input type="submit" class="button" name="yd_refresh_status" value="Обновить статус" title="Запросить актуальный статус доставки из API Яндекс Доставки. Автоматически обновляется каждые 2 часа."></p>';
 
                 // Дебаг-лог (если включён)
                 if ( yd_is_debug( $order_id ) ) {
@@ -2039,8 +2039,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 }
                 echo '<hr style="margin:8px 0;">';
 
-                echo '<p>После нажатия кнопки заказ будет создан как черновик в Яндекс Доставке.</p>';
-                echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Создать черновик заказа"></p>';
+                echo '<p style="font-size:12px;color:#666;">Нажмите кнопку чтобы зарегистрировать заявку в Яндекс Доставке. После этого принесите посылку в пункт приёма.</p>';
+                echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Отправить в ЯД" title="Создать заявку на доставку в Яндекс Доставке. Заказ будет сразу зарегистрирован, посылку нужно будет принести в пункт приёма."></p>';
             }
         }
     }
