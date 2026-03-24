@@ -61,8 +61,14 @@ class Yandex_Delivery_API {
     public function post( $endpoint, $body = array() ) {
         $this->last_error = null;
 
+        $url = self::BASE_URL . $endpoint;
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API POST ' . $endpoint . ' | body=' . wp_json_encode( $body ) );
+        }
+
         $response = wp_remote_post(
-            self::BASE_URL . $endpoint,
+            $url,
             array(
                 'timeout' => $this->timeout,
                 'headers' => array(
@@ -81,7 +87,12 @@ class Yandex_Delivery_API {
         }
 
         $status = wp_remote_retrieve_response_code( $response );
-        $data   = json_decode( wp_remote_retrieve_body( $response ), true );
+        $raw_body = wp_remote_retrieve_body( $response );
+        $data   = json_decode( $raw_body, true );
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API RESPONSE ' . $endpoint . ' | status=' . $status . ' | body=' . mb_substr( $raw_body, 0, 2000 ) );
+        }
 
         // P2 Fix: принимаем 200, 201, 204 как успешные ответы
         if ( $status < 200 || $status >= 300 ) {
