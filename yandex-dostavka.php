@@ -2339,7 +2339,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
             // Определяем адрес назначения и тип доставки
             $isSelfPickup = ( strpos( $shippingData['method_id'], 'yd_self' ) !== false );
-            $isCod = ( strpos( $shippingData['method_id'], '_after' ) !== false );
+            // Как в метабоксе: наложенный платёж = доставка *_after ИЛИ способ оплаты WC cod
+            $isCod = ( strpos( $shippingData['method_id'], '_after' ) !== false )
+                || ( $order->get_payment_method() === 'cod' );
 
             if ( $isSelfPickup ) {
                 $yd_code = $order->get_meta( 'yd_code' );
