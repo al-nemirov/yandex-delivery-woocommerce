@@ -51,7 +51,7 @@ class YD_MoySklad {
 		$ms_error = $order->get_meta( self::ORDER_META_ERROR );
 		if ( $ms_id ) {
 			$href = 'https://online.moysklad.ru/app/#customerorder/edit?id=' . $ms_id;
-			echo '<p>' . esc_html__( 'Заказ передан в Мой Склад.', 'yandex-dostavka' ) . '</p>';
+			echo '<p>' . esc_html__( 'Заказ передан в Мой Склад (черновик).', 'yandex-dostavka' ) . '</p>';
 			echo '<p><a href="' . esc_url( $href ) . '" target="_blank" rel="noopener">' . esc_html__( 'Открыть в Мой Склад', 'yandex-dostavka' ) . '</a></p>';
 		} elseif ( $ms_error ) {
 			echo '<p><strong>' . esc_html__( 'Ошибка синхронизации:', 'yandex-dostavka' ) . '</strong><br>' . esc_html( $ms_error ) . '</p>';
@@ -242,6 +242,7 @@ class YD_MoySklad {
 		$order_number = $order->get_order_number();
 		$body = array(
 			'name'          => (string) $order_number,
+			'applicable'    => false, // Создаём как черновик (не проведён)
 			'agent'         => array( 'meta' => $agent_meta ),
 			'organization'  => array( 'meta' => $organization_meta ),
 			'description'   => sprintf(
