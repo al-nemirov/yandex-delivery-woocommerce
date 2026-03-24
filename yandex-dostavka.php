@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.2.3
+Version: 2.3.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1562,15 +1562,25 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p>Адрес пункта выдачи: ' . esc_html( $yd_address ) . '</p>';
                 }
             } elseif ( isset( $trackingNumber ) && $trackingNumber !== '' ) {
+                $isConfirmed = $order->get_meta( 'yd_confirmed' );
+
                 echo '<p><span style="display: inline-block;">Номер отправления:</span>';
                 echo '<span style="margin-left: 10px"><b>' . esc_html( $trackingNumber ) . '</b></span>';
-                echo '<p><a class="button" href="' . esc_url( $labelLink ) . '" target="_blank">Скачать этикетку</a></p>';
+
+                if ( ! $isConfirmed ) {
+                    echo '<p style="margin: 8px 0;"><span style="color: #b26200; font-weight: 600;">&#9888; Черновик — не подтверждён</span></p>';
+                    echo '<p><input type="submit" class="button button-primary" name="yd_confirm_parsel" value="Подтвердить заказ"></p>';
+                }
+
+                if ( ! empty( $labelLink ) ) {
+                    echo '<p><a class="button" href="' . esc_url( $labelLink ) . '" target="_blank">Скачать этикетку</a></p>';
+                }
 
                 if ( isset( $actLink ) && $actLink !== '' ) {
                     echo '<p><a class="button" href="' . esc_url( $actLink ) . '" target="_blank">Скачать акт</a></p>';
                 }
 
-                if ( empty( $actLink ) ) {
+                if ( empty( $actLink ) && $isConfirmed ) {
                     echo '<p><input type="submit" class="add_note button" name="yd_create_act" value="Сформировать акт"></p>';
                 }
 
@@ -1597,8 +1607,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                          ) . '</a></p>';
                     echo '<p>Адрес пункта выдачи: ' . esc_html( $yd_address ) . '</p>';
                 }
-                echo '<p>После нажатия кнопки заказ будет создан в системе Яндекс Доставки.</p>';
-                echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Отправить заказ в систему"></p>';
+                echo '<p>После нажатия кнопки заказ будет создан как черновик в Яндекс Доставке.</p>';
+                echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Создать черновик заказа"></p>';
             }
         }
     }
@@ -1611,6 +1621,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         if ( isset( $_POST['yd_create_parsel'] ) ) {
             if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
                 yd_get_tracking_code( $postId );
+            }
+        }
+        if ( isset( $_POST['yd_confirm_parsel'] ) ) {
+            if ( isset( $_POST['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'update-post_' . $postId ) ) {
+                yd_confirm_order( $postId );
             }
         }
         if ( isset( $_POST['yd_create_act'] ) ) {
@@ -1840,6 +1855,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 'total_weight'         => (int) $fullPackage['weight'],
                 'tariff'               => $isSelfPickup ? 'self_pickup' : 'time_interval',
                 'delivery_cost'        => (float) $shippingData['cost'],
+                'auto_accept'          => false,
             );
 
             if ( $isSelfPickup && ! empty( $yd_code ) ) {
@@ -1850,9 +1866,6 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $request_data['payment_method'] = 'cash_on_delivery';
                 $request_data['payment_sum']    = round( $declaredCost + $shippingData['cost'], 2 );
             }
-
-            $autoact    = (int) $shippingData['object']->get_option( 'autoact' );
-            $autoStatus = $shippingData['object']->get_option( 'order_status_send' );
 
             $answer = $yd_client->create_request( $request_data );
 
@@ -1885,23 +1898,64 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                 $order->update_meta_data( 'yd_link', $labelUrl );
                 $order->delete_meta_data( 'yd_error' );
+                $order->delete_meta_data( 'yd_confirmed' );
                 $order->save();
-
-                if ( $autoact === 1 ) {
-                    bxbCreateAct( $postId );
-                }
-
-                if ( $autoStatus && wc_is_order_status( $autoStatus ) ) {
-                    $statusOrder = wc_get_order( $orderId );
-                    if ( $statusOrder ) {
-                        $statusOrder->update_status( $autoStatus, sprintf( 'Успешная регистрация в Яндекс Доставке: %s', $requestId ) );
-                        do_action( 'woocommerce_yd_tracking_code', 'send', $statusOrder, $requestId );
-                    }
-                }
             } else {
                 $order->update_meta_data( 'yd_error', 'API не вернул request_id. Ответ: ' . wp_json_encode( $answer ) );
                 $order->save();
             }
+        }
+    }
+
+    /**
+     * Подтвердить черновик заказа в Яндекс Доставке.
+     */
+    function yd_confirm_order( $postId )
+    {
+        $order = wc_get_order( $postId );
+        if ( ! $order ) {
+            return;
+        }
+
+        $shippingData = bxbGetShippingData( $order );
+        if ( ! isset( $shippingData['object'] ) ) {
+            return;
+        }
+
+        $trackingNumber = $order->get_meta( 'yd_tracking_number' );
+        if ( empty( $trackingNumber ) ) {
+            $order->update_meta_data( 'yd_error', 'Нет номера заказа для подтверждения' );
+            $order->save();
+            return;
+        }
+
+        $key = $shippingData['object']->get_option( 'key' );
+        $yd_client = new Yandex_Delivery_API( $key );
+        $answer = $yd_client->confirm_request( $trackingNumber );
+
+        if ( is_wp_error( $answer ) ) {
+            $errorMsg = $answer->get_error_message();
+            $order->update_meta_data( 'yd_error', 'Ошибка подтверждения: ' . $errorMsg );
+            $order->save();
+            error_log( '[YD] confirm_request error for order #' . $postId . ': ' . $errorMsg );
+            return;
+        }
+
+        $order->update_meta_data( 'yd_confirmed', '1' );
+        $order->delete_meta_data( 'yd_error' );
+        $order->save();
+
+        // Автогенерация акта после подтверждения
+        $autoact = (int) $shippingData['object']->get_option( 'autoact' );
+        if ( $autoact === 1 ) {
+            bxbCreateAct( $postId );
+        }
+
+        // Автоустановка статуса WC заказа
+        $autoStatus = $shippingData['object']->get_option( 'order_status_send' );
+        if ( $autoStatus && wc_is_order_status( $autoStatus ) ) {
+            $order->update_status( $autoStatus, sprintf( 'Заказ подтверждён в Яндекс Доставке: %s', $trackingNumber ) );
+            do_action( 'woocommerce_yd_tracking_code', 'confirm', $order, $trackingNumber );
         }
     }
 
