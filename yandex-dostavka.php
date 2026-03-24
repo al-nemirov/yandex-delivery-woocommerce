@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.8.2
+Version: 2.9.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1211,13 +1211,24 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     ),
                     'debug_mode'                          => array(
                         'title'    => 'Режим отладки',
-                        'desc_tip' => 'Включает подробное логирование всех API-запросов и ответов в debug.log и мета-бокс заказа. Выключайте на продакшене!',
+                        'desc_tip' => 'Включает подробное логирование всех API-запросов и ответов в yd-debug.log и мета-бокс заказа. Выключайте на продакшене!',
                         'type'     => 'select',
                         'class'    => 'wc-enhanced-select',
                         'default'  => '0',
                         'options'  => [
                             '0' => 'Выключено',
                             '1' => 'Включено',
+                        ]
+                    ),
+                    'show_reset_button'                   => array(
+                        'title'    => 'Кнопка сброса статуса',
+                        'desc_tip' => 'Показывать кнопку «Сброс статуса» в мета-боксе заказа. Используйте для тестов — сбрасывает данные ЯД и позволяет отправить заказ заново.',
+                        'type'     => 'select',
+                        'class'    => 'wc-enhanced-select',
+                        'default'  => '0',
+                        'options'  => [
+                            '0' => 'Скрыта',
+                            '1' => 'Показана',
                         ]
                     ),
                 );
@@ -1911,23 +1922,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p>Адрес пункта выдачи: ' . esc_html( $yd_address ) . '</p>';
                 }
             } elseif ( isset( $trackingNumber ) && $trackingNumber !== '' ) {
-                $isConfirmed = $order->get_meta( 'yd_confirmed' );
 
                 echo '<p><span style="display: inline-block;">Номер отправления:</span>';
                 echo '<span style="margin-left: 10px"><b>' . esc_html( $trackingNumber ) . '</b></span>';
 
-                // Способ оплаты (та же логика, что и billing_info в request/create)
-                $paymentMethod = $order->get_payment_method();
+                // Способ оплаты
                 $paymentTitle  = $order->get_payment_method_title();
                 if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
-                    echo '<p style="color:#b26200;margin:4px 0;">&#128176; ' . esc_html( $paymentTitle ) . ' — <strong>' . wc_price( $order->get_total() ) . '</strong></p>';
+                    echo '<p style="color:#b26200;margin:4px 0;">&#128176; Оплата при получении — <strong>' . wc_price( $order->get_total() ) . '</strong></p>';
                 } else {
                     echo '<p style="color:#059377;margin:4px 0;">&#9989; ' . esc_html( $paymentTitle ) . '</p>';
-                }
-
-                if ( ! $isConfirmed ) {
-                    echo '<p style="margin: 8px 0;"><span style="color: #b26200; font-weight: 600;">&#9888; Черновик — не подтверждён</span></p>';
-                    echo '<p><input type="submit" class="button button-primary" name="yd_confirm_parsel" value="Подтвердить заказ"></p>';
                 }
 
                 if ( ! empty( $labelLink ) ) {
@@ -1938,8 +1942,14 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p><a class="button" href="' . esc_url( $actLink ) . '" target="_blank">Скачать акт</a></p>';
                 }
 
-                if ( empty( $actLink ) && $isConfirmed ) {
+                if ( empty( $actLink ) ) {
                     echo '<p><input type="submit" class="add_note button" name="yd_create_act" value="Сформировать акт"></p>';
+                }
+
+                // Сброс (настройка show_reset_button)
+                if ( $shippingData['object']->get_option( 'show_reset_button' ) === '1' ) {
+                    echo '<hr style="margin:8px 0;">';
+                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Сброс статуса" onclick="return confirm(\'Сбросить данные ЯД? Старую заявку нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;"></p>';
                 }
 
                 // Показываем сохранённый трекинг из меты (без лишних API-запросов)
@@ -2093,8 +2103,25 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             yd_log_always( 'yd_create_parsel detected for order #' . $postId );
             yd_get_tracking_code( $postId );
         }
-        if ( isset( $_POST['yd_confirm_parsel'] ) ) {
-            yd_confirm_order( $postId );
+        if ( isset( $_POST['yd_resend_parsel'] ) ) {
+            yd_log_always( 'yd_resend_parsel detected for order #' . $postId );
+            // Очищаем старые данные и создаём заново
+            $order = wc_get_order( $postId );
+            if ( $order ) {
+                $order->delete_meta_data( 'yd_tracking_number' );
+                $order->delete_meta_data( 'yd_link' );
+                $order->delete_meta_data( 'yd_act_link' );
+                $order->delete_meta_data( 'yd_error' );
+                $order->delete_meta_data( 'yd_confirmed' );
+                $order->delete_meta_data( 'yd_last_status' );
+                $order->delete_meta_data( 'yd_last_status_code' );
+                $order->delete_meta_data( 'yd_last_status_date' );
+                $order->delete_meta_data( 'yd_tracking_history' );
+                $order->delete_meta_data( 'yd_last_sync' );
+                $order->delete_meta_data( 'yd_debug_log' );
+                $order->save();
+                yd_get_tracking_code( $postId );
+            }
         }
         if ( isset( $_POST['yd_refresh_status'] ) ) {
             yd_sync_single_order_status( $postId );
