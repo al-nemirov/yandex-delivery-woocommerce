@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.10.2
+Version: 2.11.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -29,6 +29,65 @@ if ( is_admin() && isset( $_GET['force-check'] ) ) {
     delete_transient( 'yd_github_release' );
 }
 
+/**
+ * HTTP-заголовки для GitHub API (обязателен User-Agent, иначе 403).
+ *
+ * @return array
+ */
+function yd_github_api_request_args() {
+    return array(
+        'timeout' => 12,
+        'headers' => array(
+            'Accept'     => 'application/vnd.github.v3+json',
+            'User-Agent' => 'YandexDostavka-WordPress-Updater/1.0 (+https://github.com/al-nemirov/yandex-delivery-woocommerce)',
+        ),
+    );
+}
+
+/**
+ * Последний опубликованный релиз (включая pre-release).
+ * В отличие от /releases/latest, не игнорирует черновики помеченные как pre-release на GitHub.
+ *
+ * @return array|null Декодированный JSON одного релиза или null
+ */
+function yd_github_get_latest_release_payload() {
+    $url      = 'https://api.github.com/repos/al-nemirov/yandex-delivery-woocommerce/releases?per_page=10';
+    $response = wp_remote_get( $url, yd_github_api_request_args() );
+
+    if ( is_wp_error( $response ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[YD Updater] GitHub request error: ' . $response->get_error_message() );
+        }
+        return null;
+    }
+
+    $code = wp_remote_retrieve_response_code( $response );
+    $body = wp_remote_retrieve_body( $response );
+    if ( $code !== 200 ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[YD Updater] GitHub HTTP ' . $code . ': ' . mb_substr( $body, 0, 500 ) );
+        }
+        return null;
+    }
+
+    $list = json_decode( $body, true );
+    if ( ! is_array( $list ) ) {
+        return null;
+    }
+
+    foreach ( $list as $item ) {
+        if ( ! is_array( $item ) || ! empty( $item['draft'] ) ) {
+            continue;
+        }
+        if ( empty( $item['tag_name'] ) ) {
+            continue;
+        }
+        return $item;
+    }
+
+    return null;
+}
+
 function yd_github_check_update( $transient ) {
     if ( empty( $transient->checked ) ) {
         return $transient;
@@ -38,25 +97,17 @@ function yd_github_check_update( $transient ) {
     $plugin_data = get_plugin_data( __FILE__ );
     $current_ver = $plugin_data['Version'];
 
-    // Запрашиваем последний релиз с GitHub (кэш 12 часов)
     $cache_key = 'yd_github_release';
     $release   = get_transient( $cache_key );
 
     if ( false === $release ) {
-        $response = wp_remote_get( 'https://api.github.com/repos/al-nemirov/yandex-delivery-woocommerce/releases/latest', array(
-            'timeout' => 10,
-            'headers' => array( 'Accept' => 'application/vnd.github.v3+json' ),
-        ) );
-
-        if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
-            return $transient;
+        $release = yd_github_get_latest_release_payload();
+        if ( is_array( $release ) ) {
+            set_transient( $cache_key, $release, 6 * HOUR_IN_SECONDS );
         }
-
-        $release = json_decode( wp_remote_retrieve_body( $response ), true );
-        set_transient( $cache_key, $release, 6 * HOUR_IN_SECONDS );
     }
 
-    if ( empty( $release['tag_name'] ) ) {
+    if ( ! is_array( $release ) || empty( $release['tag_name'] ) ) {
         return $transient;
     }
 
