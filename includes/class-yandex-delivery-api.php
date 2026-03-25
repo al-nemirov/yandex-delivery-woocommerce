@@ -110,6 +110,65 @@ class Yandex_Delivery_API {
         return $data;
     }
 
+    /**
+     * Make GET request to Yandex Delivery API.
+     *
+     * @param string $endpoint     API path (e.g. '/api/b2b/platform/request/info')
+     * @param array  $query_args   Query string parameters
+     * @return array|WP_Error      Decoded JSON response or WP_Error
+     */
+    public function get( $endpoint, $query_args = array() ) {
+        $this->last_error = null;
+
+        $url = self::BASE_URL . $endpoint;
+        if ( ! empty( $query_args ) ) {
+            $url .= '?' . http_build_query( $query_args, '', '&', PHP_QUERY_RFC3986 );
+        }
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API GET ' . $endpoint . ' | query=' . wp_json_encode( $query_args ) );
+        }
+
+        $response = wp_remote_get(
+            $url,
+            array(
+                'timeout' => $this->timeout,
+                'headers' => array(
+                    'Authorization'   => 'Bearer ' . $this->token,
+                    'Accept'          => 'application/json',
+                    'Accept-Language' => 'ru',
+                ),
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            $this->last_error = $response->get_error_message();
+            error_log( '[YD API] HTTP error: ' . $this->last_error );
+            return $response;
+        }
+
+        $status   = wp_remote_retrieve_response_code( $response );
+        $raw_body = wp_remote_retrieve_body( $response );
+        $data     = json_decode( $raw_body, true );
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API RESPONSE ' . $endpoint . ' | status=' . $status . ' | body=' . mb_substr( $raw_body, 0, 2000 ) );
+        }
+
+        if ( $status < 200 || $status >= 300 ) {
+            $msg = isset( $data['message'] ) ? $data['message'] : 'HTTP ' . $status;
+            $this->last_error = $msg;
+            error_log( '[YD API] Error ' . $status . ': ' . $msg );
+            return new WP_Error( 'yd_api_error', $msg, array( 'status' => $status ) );
+        }
+
+        if ( $status === 204 || $data === null ) {
+            return array();
+        }
+
+        return $data;
+    }
+
     // ─── Pricing ─────────────────────────────────────────────
 
     /**
@@ -248,9 +307,10 @@ class Yandex_Delivery_API {
      * @return array|WP_Error
      */
     public function get_request_info( $request_id ) {
-        return $this->post( '/api/b2b/platform/request/info', array(
-            'request_id' => $request_id,
-        ) );
+        return $this->get(
+            '/api/b2b/platform/request/info',
+            array( 'request_id' => (string) $request_id )
+        );
     }
 
     /**
@@ -260,33 +320,165 @@ class Yandex_Delivery_API {
      * @return array|WP_Error
      */
     public function get_request_history( $request_id ) {
-        return $this->post( '/api/b2b/platform/request/history', array(
-            'request_id' => $request_id,
-        ) );
+        return $this->get(
+            '/api/b2b/platform/request/history',
+            array( 'request_id' => (string) $request_id )
+        );
     }
 
     // ─── Labels & Acts ───────────────────────────────────────
 
     /**
      * Сгенерировать ярлыки для заказов.
+     * Ответ может быть JSON (url / label_url) или PDF — как get-handover-act.
      *
-     * @param array $request_ids  Массив request_id
-     * @return array|WP_Error
+     * @param array $request_ids Массив request_id
+     * @return array|WP_Error Успех с PDF: [ '_pdf' => binary, '_filename' => string ]
      */
     public function generate_labels( $request_ids ) {
-        return $this->post( '/api/b2b/platform/request/generate-labels', array(
-            'request_ids' => (array) $request_ids,
-        ) );
+        $this->last_error = null;
+
+        $endpoint = '/api/b2b/platform/request/generate-labels';
+        $url      = self::BASE_URL . $endpoint;
+        $body     = array( 'request_ids' => (array) $request_ids );
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API POST ' . $endpoint . ' | body=' . wp_json_encode( $body ) );
+        }
+
+        $response = wp_remote_post(
+            $url,
+            array(
+                'timeout' => $this->timeout,
+                'headers' => array(
+                    'Authorization'   => 'Bearer ' . $this->token,
+                    'Content-Type'    => 'application/json',
+                    'Accept'          => 'application/pdf, application/json',
+                    'Accept-Language' => 'ru',
+                ),
+                'body' => wp_json_encode( $body ),
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            $this->last_error = $response->get_error_message();
+            error_log( '[YD API] HTTP error: ' . $this->last_error );
+            return $response;
+        }
+
+        $status   = wp_remote_retrieve_response_code( $response );
+        $raw_body = wp_remote_retrieve_body( $response );
+        $ctype    = (string) wp_remote_retrieve_header( $response, 'content-type' );
+        $disp     = (string) wp_remote_retrieve_header( $response, 'content-disposition' );
+        $json     = json_decode( $raw_body, true );
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API RESPONSE ' . $endpoint . ' | status=' . $status . ' | body=' . mb_substr( $raw_body, 0, 2000 ) );
+        }
+
+        if ( $status < 200 || $status >= 300 ) {
+            $msg = is_array( $json ) && isset( $json['message'] ) ? $json['message'] : 'HTTP ' . $status;
+            $this->last_error = $msg;
+            error_log( '[YD API] Error ' . $status . ': ' . $msg );
+            return new WP_Error( 'yd_api_error', $msg, array( 'status' => $status ) );
+        }
+
+        if ( is_array( $json ) ) {
+            return $json;
+        }
+
+        if ( strncmp( $raw_body, '%PDF', 4 ) === 0 || stripos( $ctype, 'pdf' ) !== false ) {
+            $filename = '';
+            if ( preg_match( '/filename\*?=(?:UTF-8\'\')?([^;]+)/i', $disp, $m ) ) {
+                $filename = trim( $m[1], " \"'" );
+            }
+            return array(
+                '_pdf'      => $raw_body,
+                '_filename' => $filename,
+            );
+        }
+
+        if ( $status === 204 || $raw_body === '' ) {
+            return array();
+        }
+
+        return new WP_Error( 'yd_api_error', 'Не удалось разобрать ответ generate-labels' );
     }
 
     /**
-     * Сгенерировать акт передачи.
+     * Сгенерировать акт приёма-передачи (справка ЯД: POST request/get-handover-act).
+     * Успешный ответ — чаще всего PDF (бинарное тело), не JSON.
      *
-     * @param array $data
-     * @return array|WP_Error
+     * @param array $data Должен содержать request_ids (string[]) и/или request_codes
+     * @return array|WP_Error При успехе с PDF: [ '_pdf' => string (binary), '_filename' => suggested name из Content-Disposition ]
      */
     public function generate_act( $data ) {
-        return $this->post( '/api/b2b/platform/request/generate-act', $data );
+        $this->last_error = null;
+
+        $endpoint = '/api/b2b/platform/request/get-handover-act';
+        $url      = self::BASE_URL . $endpoint;
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API POST ' . $endpoint . ' | body=' . wp_json_encode( $data ) );
+        }
+
+        $response = wp_remote_post(
+            $url,
+            array(
+                'timeout' => $this->timeout,
+                'headers' => array(
+                    'Authorization'   => 'Bearer ' . $this->token,
+                    'Content-Type'    => 'application/json',
+                    'Accept'          => 'application/pdf, application/json',
+                    'Accept-Language' => 'ru',
+                ),
+                'body' => wp_json_encode( $data ),
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            $this->last_error = $response->get_error_message();
+            error_log( '[YD API] HTTP error: ' . $this->last_error );
+            return $response;
+        }
+
+        $status      = wp_remote_retrieve_response_code( $response );
+        $raw_body    = wp_remote_retrieve_body( $response );
+        $ctype = (string) wp_remote_retrieve_header( $response, 'content-type' );
+        $disp  = (string) wp_remote_retrieve_header( $response, 'content-disposition' );
+        $json        = json_decode( $raw_body, true );
+
+        if ( function_exists( 'yd_log' ) ) {
+            yd_log( 'API RESPONSE ' . $endpoint . ' | status=' . $status . ' | body=' . mb_substr( $raw_body, 0, 2000 ) );
+        }
+
+        if ( $status < 200 || $status >= 300 ) {
+            $msg = is_array( $json ) && isset( $json['message'] ) ? $json['message'] : 'HTTP ' . $status;
+            $this->last_error = $msg;
+            error_log( '[YD API] Error ' . $status . ': ' . $msg );
+            return new WP_Error( 'yd_api_error', $msg, array( 'status' => $status ) );
+        }
+
+        if ( is_array( $json ) ) {
+            return $json;
+        }
+
+        if ( strncmp( $raw_body, '%PDF', 4 ) === 0 || stripos( $ctype, 'pdf' ) !== false ) {
+            $filename = '';
+            if ( preg_match( '/filename\*?=(?:UTF-8\'\')?([^;]+)/i', $disp, $m ) ) {
+                $filename = trim( $m[1], " \"'" );
+            }
+            return array(
+                '_pdf'      => $raw_body,
+                '_filename' => $filename,
+            );
+        }
+
+        if ( $status === 204 || $raw_body === '' ) {
+            return array();
+        }
+
+        return new WP_Error( 'yd_api_error', 'Не удалось разобрать ответ акта' );
     }
 
     // ─── Delivery Methods ────────────────────────────────────
