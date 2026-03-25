@@ -1,7 +1,7 @@
 === Яндекс Доставка для WooCommerce ===
 Contributors: al-nemirov
 Tags: доставка, woocommerce, яндекс, shipping, delivery, pvz, курьер
-Stable tag: 2.2.1
+Stable tag: 2.11.0
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
