@@ -3204,6 +3204,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                    data-depth="' . esc_attr( $depth ) . '"
                    data-api-url="' . esc_attr( $api_url ) . '"
                 >' . $link_with_img . $nbsp . esc_html( $link_title ) . '</a></p>';
+
+                    // Показываем выбранный ПВЗ из cookie (переживает update_checkout)
+                    $pvz_address = isset( $_COOKIE['yd_pvz_address'] ) ? sanitize_text_field( wp_unslash( urldecode( $_COOKIE['yd_pvz_address'] ) ) ) : '';
+                    $pvz_code    = isset( $_COOKIE['yd_pvz_code'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) : '';
+                    if ( $pvz_address && $pvz_code ) {
+                        echo '<div class="nd-pvz-selected" style="margin:8px 0 4px 15px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:14px;color:#166534;"><strong>ПВЗ:</strong> ' . esc_html( $pvz_address ) . '</div>';
+                    }
                 }
             }
         }

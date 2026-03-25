@@ -204,10 +204,10 @@ function getCityField(){
 }
 
 jQuery(document.body).on('updated_checkout', function () {
-    // WC перерисовывает DOM — восстанавливаем выбранный ПВЗ
-    // Несколько попыток с разной задержкой (WC может рисовать DOM асинхронно)
-    function ndRestorePvzAfterUpdate() {
-        // Восстанавливаем из cookie если переменная потерялась
+    // Зелёный блок ПВЗ теперь рендерится сервером (PHP из cookie)
+    // Здесь только обновляем текст кнопки и восстанавливаем JS-переменные
+    setTimeout(function() {
+        // Восстанавливаем JS-переменные из cookie (нужны для повторной отправки)
         if (!ydWidgetSelectedPointAddress) {
             var cookieAddr = ndGetCookie('yd_pvz_address');
             var cookieCode = ndGetCookie('yd_pvz_code');
@@ -217,26 +217,13 @@ jQuery(document.body).on('updated_checkout', function () {
             }
         }
 
-        if (!ydWidgetSelectedPointAddress) return;
-
-        var elements = jQuery('a[data-yandex-dostavka-open="true"]');
-        if (elements.length) {
-            elements.each(function() {
+        // Обновляем текст кнопки
+        if (ydWidgetSelectedPointAddress) {
+            jQuery('a[data-yandex-dostavka-open="true"]').each(function() {
                 jQuery(this).text(ydWidgetSelectedPointAddress);
             });
         }
 
-        // Показываем зелёный блок с выбранным ПВЗ
-        ndShowPvzSelected(ydWidgetSelectedPointAddress);
-    }
-
-    // Пробуем несколько раз — WC может обновлять DOM с разной скоростью
-    ndRestorePvzAfterUpdate();
-    setTimeout(ndRestorePvzAfterUpdate, 150);
-    setTimeout(ndRestorePvzAfterUpdate, 500);
-    setTimeout(ndRestorePvzAfterUpdate, 1000);
-
-    setTimeout(function() {
         ndMaybeAttachAddressSuggest();
         ndToggleAddressField();
     }, 100);
