@@ -2319,7 +2319,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 // Сброс (настройка show_reset_button)
                 if ( $shippingData['object']->get_option( 'show_reset_button' ) === '1' ) {
                     echo '<hr style="margin:8px 0;">';
-                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Сброс статуса" onclick="return confirm(\'Сбросить данные ЯД? Старую заявку нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Удалить все данные Яндекс Доставки из этого заказа и создать заявку заново. ВАЖНО: старую заявку нужно отменить в личном кабинете ЯД вручную!"></p>';
+                    echo '<p><input type="submit" class="button" name="yd_reset_order" value="Сбросить статус ЯД" onclick="return confirm(\'Сбросить данные ЯД и вернуть кнопку «Отправить в ЯД»? Старую заявку нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Удалить все данные Яндекс Доставки из этого заказа. После сброса появится кнопка для повторной отправки."></p>';
                 }
 
                 // Показываем сохранённый трекинг из меты (без лишних API-запросов)
@@ -2458,6 +2458,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         $action_key = '';
         if ( isset( $_POST['yd_create_parsel'] ) ) { $action_key = 'create_' . $postId; }
         elseif ( isset( $_POST['yd_resend_parsel'] ) ) { $action_key = 'resend_' . $postId; }
+        elseif ( isset( $_POST['yd_reset_order'] ) ) { $action_key = 'reset_' . $postId; }
         elseif ( isset( $_POST['yd_refresh_status'] ) ) { $action_key = 'refresh_' . $postId; }
         elseif ( isset( $_POST['yd_create_act'] ) ) { $action_key = 'act_' . $postId; }
         elseif ( isset( $_POST['yd_download_label'] ) ) { $action_key = 'label_' . $postId; }
@@ -2509,6 +2510,28 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $order->update_meta_data( 'yd_resend_count', $resend + 1 );
                 $order->save();
                 yd_get_tracking_code( $postId );
+            }
+        }
+        if ( isset( $_POST['yd_reset_order'] ) ) {
+            yd_log_always( 'yd_reset_order detected for order #' . $postId );
+            $order = wc_get_order( $postId );
+            if ( $order ) {
+                $order->delete_meta_data( 'yd_tracking_number' );
+                $order->delete_meta_data( 'yd_link' );
+                $order->delete_meta_data( 'yd_act_link' );
+                $order->delete_meta_data( 'yd_error' );
+                $order->delete_meta_data( 'yd_last_status' );
+                $order->delete_meta_data( 'yd_last_status_code' );
+                $order->delete_meta_data( 'yd_last_status_date' );
+                $order->delete_meta_data( 'yd_tracking_history' );
+                $order->delete_meta_data( 'yd_last_sync' );
+                $order->delete_meta_data( 'yd_debug_log' );
+                $order->delete_meta_data( 'yd_courier_order_id' );
+                $order->delete_meta_data( 'yd_sharing_url' );
+                $order->delete_meta_data( 'yd_pickup_code' );
+                $resend = (int) $order->get_meta( 'yd_resend_count' );
+                $order->update_meta_data( 'yd_resend_count', $resend + 1 );
+                $order->save();
             }
         }
         if ( isset( $_POST['yd_refresh_status'] ) ) {
