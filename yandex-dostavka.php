@@ -730,7 +730,7 @@ function yd_build_recipient_info_for_create_request( WC_Order $order, array $nam
     // Чтобы фамилия была видна — кладём полное ФИО в first_name.
     // Отключить: add_filter('yd_recipient_put_fullname_in_first_name', '__return_false');
     if ( apply_filters( 'yd_recipient_put_fullname_in_first_name', true, $order, $names ) && $fn !== '' && $ln !== '' && $ln !== '—' ) {
-        $info['first_name'] = trim( $ln . ' ' . $fn );  // Фамилия Имя (как принято в ФИО)
+        $info['first_name'] = trim( $fn . ' ' . $ln );  // Имя Фамилия (как в ЛК ЯД)
     }
 
     return apply_filters( 'yd_recipient_info_for_yandex', $info, $order, $names );
