@@ -45,19 +45,19 @@ jQuery(document).on('click', function (e) {
         e.preventDefault();
 
         (function (selectedPointLink) {
-            varcity = selectedPointLink.getAttribute('data-yandex-dostavka-city') || undefined;
-            varmethod = selectedPointLink.getAttribute('data-method');
-            vartoken = selectedPointLink.getAttribute('data-yandex-dostavka-token');
-            vartargetStart = selectedPointLink.getAttribute('data-yandex-dostavka-target-start');
-            varweight = selectedPointLink.getAttribute('data-yandex-dostavka-weight');
-            varsurch = selectedPointLink.getAttribute('data-surch');
-            varpaymentSum = selectedPointLink.getAttribute('data-paymentsum');
-            varorderSum = selectedPointLink.getAttribute('data-ordersum');
-            varheight = selectedPointLink.getAttribute('data-height');
-            varwidth = selectedPointLink.getAttribute('data-width');
-            vardepth = selectedPointLink.getAttribute('data-depth');
-            varapi = selectedPointLink.getAttribute('data-api-url');
-            varpointSelectedHandler = function (result) {
+            var city = selectedPointLink.getAttribute('data-yandex-dostavka-city') || undefined;
+            var method = selectedPointLink.getAttribute('data-method');
+            var token = selectedPointLink.getAttribute('data-yandex-dostavka-token');
+            var targetStart = selectedPointLink.getAttribute('data-yandex-dostavka-target-start');
+            var weight = selectedPointLink.getAttribute('data-yandex-dostavka-weight');
+            var surch = selectedPointLink.getAttribute('data-surch');
+            var paymentSum = selectedPointLink.getAttribute('data-paymentsum');
+            var orderSum = selectedPointLink.getAttribute('data-ordersum');
+            var height = selectedPointLink.getAttribute('data-height');
+            var width = selectedPointLink.getAttribute('data-width');
+            var depth = selectedPointLink.getAttribute('data-depth');
+            var api = selectedPointLink.getAttribute('data-api-url');
+            var pointSelectedHandler = function (result) {
                 if (typeof result !== 'undefined' && result !== null) {
                     ydWidgetPointCode = result.id;
                     ydWidgetPointName = (result.name || '').replace('Алма-Ата', 'Алматы');
@@ -83,7 +83,7 @@ jQuery(document).on('click', function (e) {
                     }
 
                     // Сохраняем в cookie и обновляем чекаут
-                    varformData = new FormData();
+                    var formData = new FormData();
                     formData.append('action', 'yd_update');
                     formData.append('nonce', window.wp_data && window.wp_data.yd_nonce ? window.wp_data.yd_nonce : '');
                     formData.append('method', method);
