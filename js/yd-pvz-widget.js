@@ -264,12 +264,35 @@
 
     window.YD_PVZ = YD_PVZ;
 
+    // Полифилл closest для IE11 и старых браузеров
+    if (!Element.prototype.closest) {
+        Element.prototype.closest = function(s) {
+            var el = this;
+            do {
+                if (el.matches ? el.matches(s) : el.msMatchesSelector ? el.msMatchesSelector(s) : false) return el;
+                el = el.parentElement || el.parentNode;
+            } while (el !== null && el.nodeType === 1);
+            return null;
+        };
+    }
+
     // Делегация: клик по кнопке «Выбрать этот ПВЗ» в балуне Яндекс Карт
     // (inline onclick не работает в Яндекс Браузере из-за CSP)
     document.addEventListener('click', function(e) {
-        var btn = e.target.closest ? e.target.closest('[data-yd-pvz-select]') : null;
-        if (!btn && e.target.getAttribute && e.target.getAttribute('data-yd-pvz-select')) {
-            btn = e.target;
+        var el = e.target;
+        var btn = null;
+        // Проверяем сам элемент и родителей
+        if (el.getAttribute && el.getAttribute('data-yd-pvz-select')) {
+            btn = el;
+        } else if (el.closest) {
+            btn = el.closest('[data-yd-pvz-select]');
+        } else {
+            // Ручной обход для совсем старых браузеров
+            var node = el;
+            while (node && node !== document.body) {
+                if (node.getAttribute && node.getAttribute('data-yd-pvz-select')) { btn = node; break; }
+                node = node.parentElement;
+            }
         }
         if (btn) {
             var pvzId = btn.getAttribute('data-yd-pvz-select');

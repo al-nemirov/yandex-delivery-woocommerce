@@ -1,6 +1,18 @@
-let ydWidgetSelectedPointAddress = false;
-let ydWidgetPointCode = false;
-let ydWidgetPointName = false;
+// Полифилл closest для IE11 и старых браузеров
+if (typeof Element !== 'undefined' && !Element.prototype.closest) {
+    Element.prototype.closest = function(s) {
+        var el = this;
+        do {
+            if (el.matches ? el.matches(s) : el.msMatchesSelector ? el.msMatchesSelector(s) : false) return el;
+            el = el.parentElement || el.parentNode;
+        } while (el !== null && el.nodeType === 1);
+        return null;
+    };
+}
+
+var ydWidgetSelectedPointAddress = false;
+var ydWidgetPointCode = false;
+var ydWidgetPointName = false;
 
 jQuery(document).on('click', function (e) {
     // DEBUG: логируем все клики по кнопке ПВЗ
@@ -33,19 +45,19 @@ jQuery(document).on('click', function (e) {
         e.preventDefault();
 
         (function (selectedPointLink) {
-            let city = selectedPointLink.getAttribute('data-yandex-dostavka-city') || undefined;
-            let method = selectedPointLink.getAttribute('data-method');
-            let token = selectedPointLink.getAttribute('data-yandex-dostavka-token');
-            let targetStart = selectedPointLink.getAttribute('data-yandex-dostavka-target-start');
-            let weight = selectedPointLink.getAttribute('data-yandex-dostavka-weight');
-            let surch = selectedPointLink.getAttribute('data-surch');
-            let paymentSum = selectedPointLink.getAttribute('data-paymentsum');
-            let orderSum = selectedPointLink.getAttribute('data-ordersum');
-            let height = selectedPointLink.getAttribute('data-height');
-            let width = selectedPointLink.getAttribute('data-width');
-            let depth = selectedPointLink.getAttribute('data-depth');
-            let api = selectedPointLink.getAttribute('data-api-url');
-            let pointSelectedHandler = function (result) {
+            varcity = selectedPointLink.getAttribute('data-yandex-dostavka-city') || undefined;
+            varmethod = selectedPointLink.getAttribute('data-method');
+            vartoken = selectedPointLink.getAttribute('data-yandex-dostavka-token');
+            vartargetStart = selectedPointLink.getAttribute('data-yandex-dostavka-target-start');
+            varweight = selectedPointLink.getAttribute('data-yandex-dostavka-weight');
+            varsurch = selectedPointLink.getAttribute('data-surch');
+            varpaymentSum = selectedPointLink.getAttribute('data-paymentsum');
+            varorderSum = selectedPointLink.getAttribute('data-ordersum');
+            varheight = selectedPointLink.getAttribute('data-height');
+            varwidth = selectedPointLink.getAttribute('data-width');
+            vardepth = selectedPointLink.getAttribute('data-depth');
+            varapi = selectedPointLink.getAttribute('data-api-url');
+            varpointSelectedHandler = function (result) {
                 if (typeof result !== 'undefined' && result !== null) {
                     ydWidgetPointCode = result.id;
                     ydWidgetPointName = (result.name || '').replace('Алма-Ата', 'Алматы');
@@ -71,7 +83,7 @@ jQuery(document).on('click', function (e) {
                     }
 
                     // Сохраняем в cookie и обновляем чекаут
-                    let formData = new FormData();
+                    varformData = new FormData();
                     formData.append('action', 'yd_update');
                     formData.append('nonce', window.wp_data && window.wp_data.yd_nonce ? window.wp_data.yd_nonce : '');
                     formData.append('method', method);
@@ -86,6 +98,28 @@ jQuery(document).on('click', function (e) {
             // Город берём из поля "Населённый пункт" — надёжнее чем data-атрибут
             var pvzCity = jQuery('#billing_city').val() || jQuery('#shipping_city').val() || '';
             console.log('[YD] Opening PVZ widget, city:', pvzCity);
+
+            // Если город не введён — подсказка и фокус на поле
+            if (!pvzCity || pvzCity.trim().length < 2) {
+                var $cityField = jQuery('#billing_city').length ? jQuery('#billing_city') : jQuery('#shipping_city');
+                if ($cityField.length) {
+                    $cityField.css({'border-color': '#d63638', 'box-shadow': '0 0 0 1px #d63638'});
+                    setTimeout(function() { $cityField.css({'border-color': '', 'box-shadow': ''}); }, 3000);
+                    $cityField.focus();
+                }
+                // Показываем подсказку
+                var $hint = jQuery('.nd-pvz-city-hint');
+                if (!$hint.length) {
+                    $hint = jQuery('<div class="nd-pvz-city-hint" style="margin:6px 0 4px 15px;padding:8px 14px;background:#fff8e1;border:1px solid #ffcc02;border-radius:6px;font-size:13px;color:#856404;">Сначала введите город в поле «Населённый пункт»</div>');
+                    var $btn = jQuery('a[data-yandex-dostavka-open="true"]').first();
+                    if ($btn.length) {
+                        $btn.closest('p').length ? $btn.closest('p').after($hint) : $btn.after($hint);
+                    }
+                }
+                setTimeout(function() { jQuery('.nd-pvz-city-hint').fadeOut(400, function() { jQuery(this).remove(); }); }, 5000);
+                return;
+            }
+
             if (typeof YD_PVZ !== 'undefined') {
                 YD_PVZ.open(pvzCity, function(point) {
                     pointSelectedHandler({
@@ -160,23 +194,37 @@ function getCityField(){
 }
 
 jQuery(document.body).on('updated_checkout', function () {
-    let elements = jQuery('a[data-yandex-dostavka-open="true"]');
+    // WC перерисовывает DOM — восстанавливаем выбранный ПВЗ с задержкой
+    setTimeout(function() {
+        var elements = jQuery('a[data-yandex-dostavka-open="true"]');
 
-    if (elements.length) {
-        for (let i = 0; i < elements.length; i++) {
-            if (ydWidgetSelectedPointAddress) {
-                jQuery(elements[i]).text(ydWidgetSelectedPointAddress);
+        if (elements.length && ydWidgetSelectedPointAddress) {
+            elements.each(function() {
+                jQuery(this).text(ydWidgetSelectedPointAddress);
+            });
+        }
+
+        // Восстанавливаем из cookie если переменная потерялась (например при reload)
+        if (!ydWidgetSelectedPointAddress) {
+            var cookieAddr = ndGetCookie('yd_pvz_address');
+            var cookieCode = ndGetCookie('yd_pvz_code');
+            if (cookieAddr && cookieCode) {
+                ydWidgetSelectedPointAddress = decodeURIComponent(cookieAddr);
+                ydWidgetPointCode = decodeURIComponent(cookieCode);
+                if (elements.length) {
+                    elements.each(function() { jQuery(this).text(ydWidgetSelectedPointAddress); });
+                }
             }
         }
-    }
 
-    // Показываем фидбек о выбранном ПВЗ после обновления чекаута
-    if (ydWidgetSelectedPointAddress) {
-        ndShowPvzSelected(ydWidgetSelectedPointAddress);
-    }
+        // Показываем зелёный блок с выбранным ПВЗ
+        if (ydWidgetSelectedPointAddress) {
+            ndShowPvzSelected(ydWidgetSelectedPointAddress);
+        }
 
-    ndMaybeAttachAddressSuggest();
-    ndToggleAddressField();
+        ndMaybeAttachAddressSuggest();
+        ndToggleAddressField();
+    }, 100);
 });
 
 jQuery(document).on('change', 'input[name="payment_method"]', function () {
@@ -190,11 +238,15 @@ jQuery(document).on('change', 'input[name="shipping_method[0]"]', function () {
 
 function ndDeleteCookie(name) {
     if (!name) return;
-    let d = new Date();
+    var d = new Date();
     d.setDate(d.getDate() - 1);
-    let expires = ";expires=" + d;
-    let value = "";
-    document.cookie = name + "=" + value + expires + "; path=/";
+    var expires = ";expires=" + d;
+    document.cookie = name + "=" + expires + "; path=/";
+}
+
+function ndGetCookie(name) {
+    var match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1') + '=([^;]*)'));
+    return match ? match[1] : '';
 }
 
 /** Проверка: выбран ли способ доставки курьером Яндекс Доставки */
