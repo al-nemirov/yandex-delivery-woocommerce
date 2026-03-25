@@ -2319,7 +2319,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 // Сброс (настройка show_reset_button)
                 if ( $shippingData['object']->get_option( 'show_reset_button' ) === '1' ) {
                     echo '<hr style="margin:8px 0;">';
-                    echo '<p><input type="submit" class="button" name="yd_reset_order" value="Сбросить статус ЯД" onclick="return confirm(\'Сбросить данные ЯД и вернуть кнопку «Отправить в ЯД»? Старую заявку нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Удалить все данные Яндекс Доставки из этого заказа. После сброса появится кнопка для повторной отправки."></p>';
+                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Пересоздать заявку" onclick="return confirm(\'Пересоздать заявку в ЯД? Старый заказ нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Удалить данные текущей заявки и создать новую в Яндекс Доставке. Старую заявку отмените в ЛК ЯД."></p>';
                 }
 
                 // Показываем сохранённый трекинг из меты (без лишних API-запросов)
