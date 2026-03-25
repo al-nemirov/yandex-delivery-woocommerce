@@ -1348,11 +1348,6 @@ function yd_is_delivered_status( $statusName ) {
 }
 
 if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ) ) ) {
-    $yd_moysklad_file = __DIR__ . '/includes/class-yandex-dostavka-moysklad.php';
-    if ( file_exists( $yd_moysklad_file ) ) {
-        require_once $yd_moysklad_file;
-        YD_MoySklad::init();
-    }
     function yd_shipping_method_init()
     {
         class WC_YD_Parent_Method extends WC_Shipping_Method {
