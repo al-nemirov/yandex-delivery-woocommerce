@@ -3534,11 +3534,12 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
 
             // Виджет выбора ПВЗ
-            wp_enqueue_script( 'yd_pvz_widget', plugin_dir_url( __FILE__ ) . 'js/yd-pvz-widget.js', array( 'jquery' ), '2.7.0', true );
+            $yd_ver = '2.12.0';
+            wp_enqueue_script( 'yd_pvz_widget', plugin_dir_url( __FILE__ ) . 'js/yd-pvz-widget.js', array( 'jquery' ), $yd_ver, true );
 
-            wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . ( 'js/yandex-dostavka.js' ), [ 'jquery', 'yd_pvz_widget' ], '2.50' );
+            wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . 'js/yandex-dostavka.js', array( 'jquery', 'yd_pvz_widget' ), $yd_ver );
 
-            wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), '4.0.1' );
+            wp_register_style( 'yd_button', plugin_dir_url( __FILE__ ) . 'css/yandex-dostavka.css', array(), $yd_ver );
 
             wp_enqueue_style( 'yd_button' );
 
