@@ -285,6 +285,9 @@ class Yandex_Delivery_API {
      * @return array|WP_Error
      */
     public function create_request( $request_data ) {
+        if ( function_exists( 'yd_request_data_round_money_for_api' ) && is_array( $request_data ) ) {
+            $request_data = yd_request_data_round_money_for_api( $request_data );
+        }
         return $this->post( '/api/b2b/platform/request/create', $request_data );
     }
 
