@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.12.0
+Version: 2.13.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -3541,7 +3541,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
 
             // Виджет выбора ПВЗ
-            $yd_ver = '2.12.0';
+            $yd_ver = get_plugin_data( __FILE__ )['Version'] ?? '2.12.0';
             wp_enqueue_script( 'yd_pvz_widget', plugin_dir_url( __FILE__ ) . 'js/yd-pvz-widget.js', array( 'jquery' ), $yd_ver, true );
 
             wp_enqueue_script( 'yd_script_handle', plugin_dir_url( __FILE__ ) . 'js/yandex-dostavka.js', array( 'jquery', 'yd_pvz_widget' ), $yd_ver );
