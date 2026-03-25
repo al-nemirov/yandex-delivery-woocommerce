@@ -765,6 +765,95 @@ function yd_run_status_sync() {
     yd_sync_order_statuses();
 }
 
+// ─── Нормализация ответов API ЯД (спецификация 2025+) ─────────────────────
+
+/**
+ * События из GET /request/history: в документации — state_history (не history).
+ *
+ * @param array $api_response
+ * @return array<int, array>
+ */
+function yd_yandex_history_events( $api_response ) {
+    if ( ! is_array( $api_response ) ) {
+        return array();
+    }
+    if ( ! empty( $api_response['state_history'] ) && is_array( $api_response['state_history'] ) ) {
+        return $api_response['state_history'];
+    }
+    if ( ! empty( $api_response['history'] ) && is_array( $api_response['history'] ) ) {
+        return $api_response['history'];
+    }
+    return array();
+}
+
+/**
+ * Дата/время из RequestState (timestamp unix или timestamp_utc ISO).
+ *
+ * @param array $event
+ * @return string Формат d.m.Y H:i или пустая строка
+ */
+function yd_format_yandex_event_time( $event ) {
+    if ( ! is_array( $event ) ) {
+        return '';
+    }
+    if ( ! empty( $event['timestamp_utc'] ) ) {
+        $t = strtotime( $event['timestamp_utc'] );
+        return $t ? date( 'd.m.Y H:i', $t ) : '';
+    }
+    if ( isset( $event['timestamp'] ) && is_numeric( $event['timestamp'] ) ) {
+        return date( 'd.m.Y H:i', (int) $event['timestamp'] );
+    }
+    if ( ! empty( $event['updated_ts'] ) ) {
+        $t = strtotime( $event['updated_ts'] );
+        return $t ? date( 'd.m.Y H:i', $t ) : '';
+    }
+    return '';
+}
+
+/**
+ * Сохранить из GET /request/info: статус, номер у оператора, ссылка трекинга для клиента, код ПВЗ.
+ *
+ * @param WC_Order $order
+ * @param array    $info Ответ API request/info
+ */
+function yd_persist_yandex_request_info_extras( $order, $info ) {
+    if ( ! $order instanceof WC_Order || ! is_array( $info ) ) {
+        return;
+    }
+
+    if ( ! empty( $info['courier_order_id'] ) ) {
+        $order->update_meta_data( 'yd_courier_order_id', sanitize_text_field( $info['courier_order_id'] ) );
+    }
+    if ( ! empty( $info['sharing_url'] ) ) {
+        $order->update_meta_data( 'yd_sharing_url', esc_url_raw( $info['sharing_url'] ) );
+    }
+    if ( ! empty( $info['self_pickup_node_code'] ) && is_array( $info['self_pickup_node_code'] ) ) {
+        $code = isset( $info['self_pickup_node_code']['code'] ) ? (string) $info['self_pickup_node_code']['code'] : '';
+        if ( $code !== '' ) {
+            $order->update_meta_data( 'yd_pickup_code', $code );
+        }
+    }
+}
+
+/**
+ * Сохраняет PDF из ответа API в медиатеку (uploads).
+ *
+ * @param string $pdf_binary
+ * @param string $preferred_filename Имя из Content-Disposition (может быть пустым)
+ * @param string $fallback_basename  Без расширения или с .pdf
+ * @return array Как wp_upload_bits (url, file, error)
+ */
+function yd_store_pdf_to_uploads( $pdf_binary, $preferred_filename, $fallback_basename ) {
+    $fname = is_string( $preferred_filename ) ? sanitize_file_name( $preferred_filename ) : '';
+    if ( $fname === '' || substr( strtolower( $fname ), -4 ) !== '.pdf' ) {
+        $fname = sanitize_file_name( (string) $fallback_basename );
+    }
+    if ( substr( strtolower( $fname ), -4 ) !== '.pdf' ) {
+        $fname .= '.pdf';
+    }
+    return wp_upload_bits( $fname, null, $pdf_binary );
+}
+
 /**
  * Синхронизация статусов доставки из API Яндекс Доставки.
  * Проверяет все заказы с трекинг-номером, которые ещё не завершены.
@@ -774,7 +863,7 @@ function yd_run_status_sync() {
 function yd_sync_order_statuses() {
     $orders = wc_get_orders( array(
         'limit'      => 50,
-        'status'     => array( 'wc-processing', 'wc-on-hold', 'wc-pending' ),
+        'status'     => array( 'processing', 'on-hold', 'pending' ),
         'meta_query' => array(
             array(
                 'key'     => 'yd_tracking_number',
@@ -820,13 +909,19 @@ function yd_sync_order_statuses() {
 
         $statusName = isset( $result['state']['description'] ) ? $result['state']['description'] : ( isset( $result['state']['status'] ) ? $result['state']['status'] : '' );
         $statusCode = isset( $result['state']['status'] ) ? $result['state']['status'] : '';
-        $statusDate = isset( $result['state']['updated_ts'] ) ? date( 'd.m.Y H:i', strtotime( $result['state']['updated_ts'] ) ) : current_time( 'd.m.Y H:i' );
+        $statusDate = yd_format_yandex_event_time( $result['state'] );
+        if ( $statusDate === '' ) {
+            $statusDate = current_time( 'd.m.Y H:i' );
+        }
         $storedStatus = $order->get_meta( 'yd_last_status' );
 
-        // Сохраняем полную историю трекинга из API
+        yd_persist_yandex_request_info_extras( $order, $result );
+
+        // Сохраняем полную историю (ключ API: state_history)
         $history = $yd_client->get_request_history( $trackingNumber );
-        if ( ! is_wp_error( $history ) && ! empty( $history['history'] ) ) {
-            $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $history['history'] ) );
+        $hist_events = yd_yandex_history_events( $history );
+        if ( ! is_wp_error( $history ) && ! empty( $hist_events ) ) {
+            $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $hist_events ) );
         }
         $order->update_meta_data( 'yd_last_sync', current_time( 'd.m.Y H:i:s' ) );
 
@@ -877,10 +972,11 @@ function yd_sync_single_order_status( $postId ) {
 
     $yd_client = new Yandex_Delivery_API( $key );
 
-    // Сохраняем историю
+    // Сохраняем историю (state_history)
     $history = $yd_client->get_request_history( $trackingNumber );
-    if ( ! is_wp_error( $history ) && ! empty( $history['history'] ) ) {
-        $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $history['history'] ) );
+    $hist_events = yd_yandex_history_events( $history );
+    if ( ! is_wp_error( $history ) && ! empty( $hist_events ) ) {
+        $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $hist_events ) );
     }
 
     // Сохраняем текущий статус
@@ -888,8 +984,13 @@ function yd_sync_single_order_status( $postId ) {
     if ( ! is_wp_error( $result ) && isset( $result['state'] ) ) {
         $statusName = isset( $result['state']['description'] ) ? $result['state']['description'] : ( isset( $result['state']['status'] ) ? $result['state']['status'] : '' );
         $statusCode = isset( $result['state']['status'] ) ? $result['state']['status'] : '';
-        $statusDate = isset( $result['state']['updated_ts'] ) ? date( 'd.m.Y H:i', strtotime( $result['state']['updated_ts'] ) ) : current_time( 'd.m.Y H:i' );
+        $statusDate = yd_format_yandex_event_time( $result['state'] );
+        if ( $statusDate === '' ) {
+            $statusDate = current_time( 'd.m.Y H:i' );
+        }
         $storedStatus = $order->get_meta( 'yd_last_status' );
+
+        yd_persist_yandex_request_info_extras( $order, $result );
 
         $order->update_meta_data( 'yd_last_status', $statusName );
         $order->update_meta_data( 'yd_last_status_code', $statusCode );
@@ -1819,14 +1920,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     function bxbGetLastStatusInOrder( $data )
     {
         $yd_client = new Yandex_Delivery_API( $data['key'] );
-        $history = $yd_client->get_request_history( $data['track'] );
+        $history      = $yd_client->get_request_history( $data['track'] );
+        $historyItems = yd_yandex_history_events( $history );
 
-        if ( ! is_wp_error( $history ) && ! empty( $history['history'] ) ) {
+        if ( ! is_wp_error( $history ) && ! empty( $historyItems ) ) {
             $html = '<div><ul class="order_notes" style="max-height: 300px; overflow-y: auto;">';
-            $items = array_reverse( $history['history'] );
+            $items = array_reverse( $historyItems );
             foreach ( $items as $idx => $status ) {
                 $statusName = isset( $status['description'] ) ? $status['description'] : ( isset( $status['status'] ) ? $status['status'] : '' );
-                $statusDate = isset( $status['timestamp'] ) ? date( 'd.m.Y H:i', strtotime( $status['timestamp'] ) ) : '';
+                $statusDate = yd_format_yandex_event_time( $status );
                 $noteClass = ( $idx === 0 ) ? 'note system-note' : 'note';
                 $html .= '<li class="' . $noteClass . '">
                             <div class="note_content">
@@ -1843,7 +1945,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         $info = $yd_client->get_request_info( $data['track'] );
         if ( ! is_wp_error( $info ) && isset( $info['state'] ) ) {
             $statusName = isset( $info['state']['description'] ) ? $info['state']['description'] : ( isset( $info['state']['status'] ) ? $info['state']['status'] : '' );
-            $statusDate = isset( $info['state']['updated_ts'] ) ? date( 'd.m.Y H:i', strtotime( $info['state']['updated_ts'] ) ) : '';
+            $statusDate = yd_format_yandex_event_time( $info['state'] );
             return '<div><ul class="order_notes">
                         <li class="note system-note">
                             <div class="note_content"><p>' . esc_html( $statusName ) . '</p></div>
@@ -1923,8 +2025,21 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 }
             } elseif ( isset( $trackingNumber ) && $trackingNumber !== '' ) {
 
-                echo '<p><span style="display: inline-block;">Номер отправления:</span>';
+                echo '<p><span style="display: inline-block;">Номер отправления (request_id):</span>';
                 echo '<span style="margin-left: 10px"><b>' . esc_html( $trackingNumber ) . '</b></span>';
+
+                $yd_courier_tr = $order->get_meta( 'yd_courier_order_id' );
+                if ( $yd_courier_tr ) {
+                    echo '<br><small style="color:#444;">Трек оператора: <strong>' . esc_html( $yd_courier_tr ) . '</strong></small>';
+                }
+                $yd_pv = $order->get_meta( 'yd_pickup_code' );
+                if ( $yd_pv ) {
+                    echo '<br><small style="color:#444;">Код выдачи в ПВЗ: <strong>' . esc_html( $yd_pv ) . '</strong></small>';
+                }
+                $yd_share = $order->get_meta( 'yd_sharing_url' );
+                if ( $yd_share ) {
+                    echo '<p style="margin:8px 0;"><a class="button" href="' . esc_url( $yd_share ) . '" target="_blank" rel="noopener noreferrer">Отслеживание для получателя (Яндекс)</a></p>';
+                }
 
                 // Способ оплаты
                 $paymentTitle  = $order->get_payment_method_title();
@@ -1966,7 +2081,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         $items = array_reverse( $historyItems );
                         foreach ( $items as $idx => $status ) {
                             $sName = isset( $status['description'] ) ? $status['description'] : ( isset( $status['status'] ) ? $status['status'] : '' );
-                            $sDate = isset( $status['timestamp'] ) ? date( 'd.m.Y H:i', strtotime( $status['timestamp'] ) ) : '';
+                            $sDate = yd_format_yandex_event_time( $status );
                             $noteClass = ( $idx === 0 ) ? 'note system-note' : 'note';
                             echo '<li class="' . $noteClass . '"><div class="note_content"><p>' . esc_html( $sName ) . '</p></div><p class="meta"><abbr class="exact-date">' . esc_html( $sDate ) . '</abbr></p></li>';
                         }
@@ -2069,8 +2184,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         return false;
     }
 
-    function yd_meta_tracking_code( $postId )
+    function yd_meta_tracking_code( $postId, $post = null )
     {
+        if ( is_object( $postId ) && is_a( $postId, 'WC_Order' ) ) {
+            $postId = $postId->get_id();
+        }
+        $postId = absint( $postId );
+        if ( ! $postId ) {
+            return;
+        }
+
         if ( ! current_user_can( 'edit_shop_orders' ) ) {
             return;
         }
@@ -2116,6 +2239,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $order->delete_meta_data( 'yd_tracking_history' );
                 $order->delete_meta_data( 'yd_last_sync' );
                 $order->delete_meta_data( 'yd_debug_log' );
+                $order->delete_meta_data( 'yd_courier_order_id' );
+                $order->delete_meta_data( 'yd_sharing_url' );
+                $order->delete_meta_data( 'yd_pickup_code' );
                 // Инкремент счётчика для уникального operator_request_id
                 $resend = (int) $order->get_meta( 'yd_resend_count' );
                 $order->update_meta_data( 'yd_resend_count', $resend + 1 );
@@ -2131,10 +2257,11 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
     }
 
-    add_action( 'woocommerce_process_shop_order_meta', 'yd_meta_tracking_code', 0, 2 );
+    // После сохранения полей заказа из формы (дефолтные обработчики WC — priority 10)
+    add_action( 'woocommerce_process_shop_order_meta', 'yd_meta_tracking_code', 50, 2 );
     // HPOS (WC 7+)
-    add_action( 'woocommerce_update_order', 'yd_meta_tracking_code', 0, 2 );
-    add_action( 'save_post_shop_order', function( $post_id ) { yd_meta_tracking_code( $post_id ); }, 10, 1 );
+    add_action( 'woocommerce_update_order', 'yd_meta_tracking_code', 50, 2 );
+    add_action( 'save_post_shop_order', function( $post_id ) { yd_meta_tracking_code( $post_id ); }, 50, 1 );
 
     function bxbCreateAct( $postId )
     {
@@ -2165,13 +2292,41 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $order->update_meta_data( 'yd_act_link', $result['url'] );
                 $order->delete_meta_data( 'yd_error' );
                 $order->save();
+            } elseif ( ! empty( $result['_pdf'] ) ) {
+                $up = yd_store_pdf_to_uploads(
+                    $result['_pdf'],
+                    ! empty( $result['_filename'] ) ? $result['_filename'] : '',
+                    'yd-label-act-' . $order->get_id() . '-' . time()
+                );
+                if ( ! empty( $up['error'] ) ) {
+                    $order->update_meta_data( 'yd_error', $up['error'] );
+                    $order->save();
+                } else {
+                    $order->update_meta_data( 'yd_act_link', $up['url'] );
+                    $order->delete_meta_data( 'yd_error' );
+                    $order->save();
+                }
             } else {
-                // Попробуем generate_act как альтернативу
+                // Акт ПП: POST /request/get-handover-act (ответ обычно PDF)
                 $act_result = $yd_client->generate_act( array( 'request_ids' => array( $trackingNumber ) ) );
                 if ( ! is_wp_error( $act_result ) && isset( $act_result['url'] ) ) {
                     $order->update_meta_data( 'yd_act_link', $act_result['url'] );
                     $order->delete_meta_data( 'yd_error' );
                     $order->save();
+                } elseif ( ! is_wp_error( $act_result ) && ! empty( $act_result['_pdf'] ) ) {
+                    $upload = yd_store_pdf_to_uploads(
+                        $act_result['_pdf'],
+                        ! empty( $act_result['_filename'] ) ? $act_result['_filename'] : '',
+                        'yd-handover-act-' . $order->get_id() . '-' . time()
+                    );
+                    if ( ! empty( $upload['error'] ) ) {
+                        $order->update_meta_data( 'yd_error', $upload['error'] );
+                        $order->save();
+                    } else {
+                        $order->update_meta_data( 'yd_act_link', $upload['url'] );
+                        $order->delete_meta_data( 'yd_error' );
+                        $order->save();
+                    }
                 } else {
                     $err = is_wp_error( $act_result ) ? $act_result->get_error_message() : 'Не удалось сформировать акт';
                     $order->update_meta_data( 'yd_error', $err );
@@ -2425,17 +2580,40 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $orderIdForApi .= '_r' . $resendCount;
             }
 
+            $deliveryCostKopecks = (int) round( (float) $shippingData['cost'] * 100 );
+
+            $ship_fn = trim( (string) $order->get_shipping_first_name() );
+            $bill_fn = trim( (string) $order->get_billing_first_name() );
+            $ship_ln = trim( (string) $order->get_shipping_last_name() );
+            $bill_ln = trim( (string) $order->get_billing_last_name() );
+
+            $info_comment = sprintf( 'WooCommerce заказ #%s', $order->get_order_number() );
+            if ( $isCod ) {
+                $goods_kop = 0;
+                foreach ( $items_list as $it ) {
+                    if ( isset( $it['billing_details']['unit_price'], $it['count'] ) ) {
+                        $goods_kop += (int) $it['billing_details']['unit_price'] * (int) $it['count'];
+                    }
+                }
+                $info_comment .= sprintf(
+                    ' | Постоплата (WooCommerce): товары %s ₽ + доставка %s ₽ = всего %s ₽. В заявке ЯД товары — в items[].billing_details (коп/шт), доставка у получателя — billing_info.delivery_cost.',
+                    wc_format_decimal( $goods_kop / 100, 2 ),
+                    wc_format_decimal( $deliveryCostKopecks / 100, 2 ),
+                    wc_format_decimal( (float) $order->get_total(), 2 )
+                );
+            }
+
             // Собираем тело запроса для Yandex Delivery API
             $request_data = array(
                 'info' => array(
                     'operator_request_id' => $orderIdForApi,
-                    'comment'             => sprintf( 'WooCommerce заказ #%s', $order->get_order_number() ),
+                    'comment'             => $info_comment,
                 ),
                 'source'      => yd_build_source( $sourceAddress, $pointForParcelName ),
                 'destination' => yd_build_destination( $isSelfPickup, $destinationAddress, isset( $yd_code ) ? $yd_code : '', $order ),
                 'recipient_info' => array(
-                    'first_name' => $order->get_shipping_first_name() ?: $order->get_billing_first_name(),
-                    'last_name'  => $order->get_shipping_last_name() ?: $order->get_billing_last_name(),
+                    'first_name' => ( $ship_fn !== '' ? $ship_fn : $bill_fn ),
+                    'last_name'  => ( $ship_ln !== '' ? $ship_ln : $bill_ln ),
                     'phone'      => $customerPhone,
                     'email'      => $customerEmail,
                 ),
@@ -2444,22 +2622,23 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 'last_mile_policy' => $isSelfPickup ? 'self_pickup' : 'time_interval',
             );
 
-            // billing_info — обязательное поле API ЯД
-            // Сумма заказа на сайте = товары + доставка (то что клиент видел при оформлении)
-            $orderTotalOnSite = (float) $order->get_total(); // полная сумма заказа как на сайте
-            $deliveryCostKopecks = (int) round( (float) $shippingData['cost'] * 100 );
-
+            // billing_info — обязательное поле API ЯД (структура как в справочнике ЯД)
             if ( $isCod ) {
-                // Оплата при получении — клиент платит полную сумму заказа при доставке
+                $pm_cod = apply_filters( 'yd_billing_payment_method_cod', 'card_on_receipt', $order );
                 $request_data['billing_info'] = array(
-                    'payment_method' => 'card_on_receipt',
+                    'payment_method' => $pm_cod,
                     'delivery_cost'  => $deliveryCostKopecks,
                 );
             } else {
-                // Уже оплачено онлайн
                 $request_data['billing_info'] = array(
-                    'payment_method' => 'already_paid',
-                    'delivery_cost'  => 0,
+                    'payment_method'                       => 'already_paid',
+                    'delivery_cost'                        => 0,
+                    'variable_delivery_cost_for_recipient' => array(
+                        array(
+                            'min_cost_of_accepted_items' => 1,
+                            'delivery_cost'              => 0,
+                        ),
+                    ),
                 );
             }
 
@@ -2482,17 +2661,39 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             if ( ! empty( $requestId ) ) {
                 $order->update_meta_data( 'yd_tracking_number', $requestId );
 
-                // Пытаемся получить ссылку на этикетку
+                // Пытаемся получить ссылку на этикетку (или PDF → загрузка в uploads)
                 $labelUrl = '';
                 if ( isset( $answer['label_url'] ) ) {
                     $labelUrl = $answer['label_url'];
                 } else {
-                    // Генерируем этикетку отдельным запросом
                     $labels = $yd_client->generate_labels( array( $requestId ) );
                     if ( ! is_wp_error( $labels ) && isset( $labels['url'] ) ) {
                         $labelUrl = $labels['url'];
                     } elseif ( ! is_wp_error( $labels ) && isset( $labels['label_url'] ) ) {
                         $labelUrl = $labels['label_url'];
+                    } elseif ( ! is_wp_error( $labels ) && ! empty( $labels['_pdf'] ) ) {
+                        $fn = ! empty( $labels['_filename'] ) ? $labels['_filename'] : '';
+                        $up = yd_store_pdf_to_uploads( $labels['_pdf'], $fn, 'yd-label-' . $order->get_id() . '-' . time() );
+                        if ( empty( $up['error'] ) ) {
+                            $labelUrl = $up['url'];
+                        }
+                    }
+                }
+
+                $info = $yd_client->get_request_info( $requestId );
+                if ( ! is_wp_error( $info ) ) {
+                    yd_persist_yandex_request_info_extras( $order, $info );
+                    if ( isset( $info['state'] ) && is_array( $info['state'] ) ) {
+                        $st = $info['state'];
+                        $order->update_meta_data( 'yd_last_status', isset( $st['description'] ) ? $st['description'] : ( isset( $st['status'] ) ? (string) $st['status'] : '' ) );
+                        $order->update_meta_data( 'yd_last_status_code', isset( $st['status'] ) ? (string) $st['status'] : '' );
+                        $sd = yd_format_yandex_event_time( $st );
+                        $order->update_meta_data( 'yd_last_status_date', $sd !== '' ? $sd : current_time( 'd.m.Y H:i' ) );
+                    }
+                    $hist = $yd_client->get_request_history( $requestId );
+                    $ev   = yd_yandex_history_events( $hist );
+                    if ( ! is_wp_error( $hist ) && ! empty( $ev ) ) {
+                        $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $ev ) );
                     }
                 }
 
@@ -3850,6 +4051,56 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     add_filter( 'woocommerce_checkout_fields', 'yd_customize_checkout_fields', 20 );
     add_filter( 'woocommerce_checkout_fields', 'yd_phone_always_required', 25 );
 
+    /**
+     * Письма WooCommerce: трек оператора и ссылка отслеживания Яндекса (после таблицы заказа).
+     */
+    add_action( 'woocommerce_email_after_order_table', 'yd_email_yandex_tracking_block', 15, 4 );
+    function yd_email_yandex_tracking_block( $order, $sent_to_admin, $plain_text, $email ) {
+        if ( ! $order instanceof WC_Order ) {
+            return;
+        }
+        $ship = bxbGetShippingData( $order );
+        if ( empty( $ship['method_id'] ) || strpos( $ship['method_id'], 'yd' ) === false ) {
+            return;
+        }
+        $rid = $order->get_meta( 'yd_tracking_number' );
+        if ( $rid === '' ) {
+            return;
+        }
+        $courier = $order->get_meta( 'yd_courier_order_id' );
+        $share   = $order->get_meta( 'yd_sharing_url' );
+        $pvcode  = $order->get_meta( 'yd_pickup_code' );
+
+        if ( $plain_text ) {
+            echo "\n" . "--- Яндекс Доставка ---\n";
+            echo 'ID заявки: ' . $rid . "\n";
+            if ( $courier ) {
+                echo 'Трек оператора: ' . $courier . "\n";
+            }
+            if ( $share ) {
+                echo 'Отследить заказ: ' . $share . "\n";
+            }
+            if ( $pvcode ) {
+                echo 'Код получения в ПВЗ: ' . $pvcode . "\n";
+            }
+            return;
+        }
+
+        echo '<div style="margin:18px 0;padding:14px;border:1px solid #ddd;border-radius:6px;background:#f7f7f7;font-family:sans-serif;font-size:14px;line-height:1.5;">';
+        echo '<p style="margin:0 0 8px;font-weight:bold;">Яндекс Доставка</p>';
+        echo '<p style="margin:4px 0;"><strong>Номер заявки:</strong> ' . esc_html( $rid ) . '</p>';
+        if ( $courier ) {
+            echo '<p style="margin:4px 0;"><strong>Трек оператора:</strong> ' . esc_html( $courier ) . '</p>';
+        }
+        if ( $pvcode ) {
+            echo '<p style="margin:4px 0;"><strong>Код в пункте выдачи:</strong> ' . esc_html( $pvcode ) . '</p>';
+        }
+        if ( $share ) {
+            echo '<p style="margin:10px 0 0;"><a href="' . esc_url( $share ) . '" style="display:inline-block;padding:10px 16px;background:#fc3f1e;color:#fff;text-decoration:none;border-radius:4px;font-weight:600;">Отследить доставку</a></p>';
+        }
+        echo '</div>';
+    }
+
     // Заголовок формы: «Ваши данные» — ловим и английский оригинал, и русский перевод
     add_filter( 'gettext', function( $translated, $text, $domain ) {
         if ( $domain === 'woocommerce' && ( $text === 'Billing details' || $translated === 'Оплата и доставка' ) ) {
@@ -4046,9 +4297,13 @@ function yd_render_order_column_content( $order ) {
     }
 
     if ( $tracking ) {
-        // Трекинг-номер (короткий)
-        $short = substr( $tracking, 0, 8 ) . '…';
-        echo '<span title="' . esc_attr( $tracking ) . '" style="font-size:11px;font-family:monospace;">' . esc_html( $short ) . '</span><br>';
+        $courier = $order->get_meta( 'yd_courier_order_id' );
+        $show    = $courier ? $courier : $tracking;
+        $short   = mb_strlen( $show ) > 14 ? mb_substr( $show, 0, 14 ) . '…' : $show;
+        $title   = $courier
+            ? sprintf( 'Оператор: %s | request_id: %s', $courier, $tracking )
+            : $tracking;
+        echo '<span title="' . esc_attr( $title ) . '" style="font-size:11px;font-family:monospace;">' . esc_html( $short ) . '</span><br>';
         // Статус
         if ( $status ) {
             echo '<span style="font-size:11px;color:#666;">' . esc_html( $status ) . '</span>';
