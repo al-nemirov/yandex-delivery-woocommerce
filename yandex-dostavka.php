@@ -199,6 +199,7 @@ function yd_github_post_install( $response, $hook_extra, $result ) {
 
 // Yandex Delivery API client
 require_once __DIR__ . '/includes/class-yandex-delivery-api.php';
+require_once __DIR__ . '/includes/yd-api-console.php';
 
 // ---------------------------------------------------------------------------
 // P0: Единые функции для расчёта оценочной стоимости и габаритов.
@@ -213,7 +214,7 @@ require_once __DIR__ . '/includes/class-yandex-delivery-api.php';
  *
  * @param  array  $items  Массив [ 'line_total' => float, 'line_tax' => float ] или WC_Order_Item_Product[].
  * @param  string $source 'cart' или 'order' — определяет, как извлекаются поля.
- * @return int    Оценочная стоимость в копейках.
+ * @return int    Оценочная стоимость в копейках (только целые рубли → кратно 100).
  */
 function yd_assessed_price_minor_units( $items, $source = 'cart' ) {
     $sum = 0;
@@ -227,7 +228,64 @@ function yd_assessed_price_minor_units( $items, $source = 'cart' ) {
             $sum += (float) $item->get_total_tax();
         }
     }
-    return (int) round( $sum * 100 );
+    return yd_money_rub_to_api_kopecks( $sum );
+}
+
+/**
+ * Сумма для API ЯД: сначала рубли округляем до целого, затем в копейки (без дробных копеек в запросе).
+ *
+ * @param float $amount_rub
+ * @return int
+ */
+function yd_money_rub_to_api_kopecks( $amount_rub ) {
+    return (int) ( round( (float) $amount_rub ) * 100 );
+}
+
+/**
+ * Уже копейки — привести к целым рублям в терминах API (кратно 100).
+ *
+ * @param int|float|string $kopecks
+ * @return int
+ */
+function yd_kopecks_whole_rubles_api( $kopecks ) {
+    return (int) ( round( (float) $kopecks / 100 ) * 100 );
+}
+
+/**
+ * Перед create_request: все денежные поля в теле — целые рубли.
+ *
+ * @param array $request_data
+ * @return array
+ */
+function yd_request_data_round_money_for_api( array $request_data ) {
+    if ( isset( $request_data['total_assessed_price'] ) ) {
+        $request_data['total_assessed_price'] = yd_kopecks_whole_rubles_api( $request_data['total_assessed_price'] );
+    }
+    if ( ! empty( $request_data['billing_info'] ) && is_array( $request_data['billing_info'] ) ) {
+        foreach ( array( 'delivery_cost', 'full_items_price' ) as $key ) {
+            if ( array_key_exists( $key, $request_data['billing_info'] ) ) {
+                $request_data['billing_info'][ $key ] = yd_kopecks_whole_rubles_api( $request_data['billing_info'][ $key ] );
+            }
+        }
+    }
+    if ( ! empty( $request_data['items'] ) && is_array( $request_data['items'] ) ) {
+        foreach ( $request_data['items'] as $idx => $it ) {
+            if ( ! is_array( $it ) ) {
+                continue;
+            }
+            if ( isset( $it['price'] ) ) {
+                $request_data['items'][ $idx ]['price'] = (int) round( (float) $it['price'] );
+            }
+            if ( ! empty( $it['billing_details'] ) && is_array( $it['billing_details'] ) ) {
+                foreach ( array( 'unit_price', 'assessed_unit_price' ) as $ik ) {
+                    if ( isset( $it['billing_details'][ $ik ] ) ) {
+                        $request_data['items'][ $idx ]['billing_details'][ $ik ] = yd_kopecks_whole_rubles_api( $it['billing_details'][ $ik ] );
+                    }
+                }
+            }
+        }
+    }
+    return $request_data;
 }
 
 /**
@@ -534,6 +592,148 @@ function yd_order_is_pay_on_receipt_for_yd_api( $order, $yd_method_id ) {
         return true;
     }
     return $order->get_payment_method() === 'cod';
+}
+
+/**
+ * Имя и фамилия получателя для API ЯД (recipient_info).
+ * ПВЗ: в shipping_ часто пустая фамилия — тогда берём billing; если всё в одном поле — делим по пробелу.
+ *
+ * @param WC_Order $order
+ * @return array{first_name:string,last_name:string}
+ */
+function yd_order_recipient_names_for_yandex( WC_Order $order ) {
+    $ship_fn = trim( (string) $order->get_shipping_first_name() );
+    $ship_ln = trim( (string) $order->get_shipping_last_name() );
+    $bill_fn = trim( (string) $order->get_billing_first_name() );
+    $bill_ln = trim( (string) $order->get_billing_last_name() );
+
+    // Доставка в тот же ПВЗ: WC часто не дублирует фамилию в shipping — берём из плательщика.
+    if ( $ship_ln === '' && $bill_ln !== '' ) {
+        $fn = $bill_fn !== '' ? $bill_fn : $ship_fn;
+        $ln = $bill_ln;
+    } else {
+        $fn = $ship_fn !== '' ? $ship_fn : $bill_fn;
+        $ln = $ship_ln !== '' ? $ship_ln : $bill_ln;
+    }
+
+    // Одно поле «Имя Фамилия» / «Тест Тестович».
+    if ( $ln === '' && $fn !== '' ) {
+        $parts = preg_split( '/\s+/u', $fn, -1, PREG_SPLIT_NO_EMPTY );
+        if ( count( $parts ) >= 2 ) {
+            $ln = (string) array_pop( $parts );
+            $fn = implode( ' ', $parts );
+        }
+    }
+
+    if ( $fn === '' && $ln === '' ) {
+        $full = trim( (string) $order->get_formatted_billing_full_name() );
+        if ( $full !== '' ) {
+            $parts = preg_split( '/\s+/u', $full, -1, PREG_SPLIT_NO_EMPTY );
+            if ( count( $parts ) >= 2 ) {
+                $ln = (string) array_pop( $parts );
+                $fn = implode( ' ', $parts );
+            } else {
+                $fn = $full;
+            }
+        }
+    }
+
+    if ( $ln === '' ) {
+        $ln = (string) apply_filters( 'yd_recipient_last_name_fallback', '—', $order, $fn );
+    }
+    if ( $fn === '' ) {
+        $fn = (string) apply_filters( 'yd_recipient_first_name_fallback', '—', $order, $ln );
+    }
+
+    return apply_filters(
+        'yd_recipient_names_for_yandex',
+        array(
+            'first_name' => $fn,
+            'last_name'  => $ln,
+        ),
+        $order
+    );
+}
+
+/**
+ * Нормализация телефона под пример из документации ЯД (Contact.phone): +79529999999.
+ *
+ * @param string $phone
+ * @return string
+ */
+function yd_normalize_phone_for_yandex_api( $phone ) {
+    $raw = trim( (string) $phone );
+    if ( $raw === '' ) {
+        return $raw;
+    }
+    $digits = preg_replace( '/\D+/', '', $raw );
+    if ( $digits === '' ) {
+        return $raw;
+    }
+    // 8 9XX … (РФ) → 7 9XX …
+    if ( strlen( $digits ) === 11 && $digits[0] === '8' ) {
+        $digits = '7' . substr( $digits, 1 );
+    }
+    // 10 цифр, моб. РФ с 9
+    if ( strlen( $digits ) === 10 && isset( $digits[0] ) && $digits[0] === '9' ) {
+        $digits = '7' . $digits;
+    }
+    if ( strlen( $digits ) === 11 && $digits[0] === '7' ) {
+        return '+' . $digits;
+    }
+    if ( strpos( $raw, '+' ) === 0 ) {
+        return '+' . $digits;
+    }
+    return $raw;
+}
+
+/**
+ * Поля recipient_info для POST /api/b2b/platform/request/create.
+ *
+ * По официальной схеме Contact (см. документацию «Доставка в другой день», метод request/create):
+ * first_name — имя, last_name — фамилия, patronymic — отчество, phone, email.
+ * Нельзя подменять фамилию строкой «Имя Фамилия» в last_name — это не соответствует контракту API.
+ *
+ * Обходной путь (дублировать полное ФИО в оба поля): только явно:
+ * add_filter( 'yd_recipient_duplicate_full_name_both_fields_workaround', '__return_true' );
+ *
+ * @param WC_Order $order
+ * @param array    $names Результат yd_order_recipient_names_for_yandex()
+ * @param string   $phone
+ * @param string   $email
+ * @return array
+ * @link https://yandex.ru/support/delivery-profile/ru/api/other-day/ref/3.-Osnovnye-zaprosy/apib2bplatformrequestcreate-post
+ */
+function yd_build_recipient_info_for_create_request( WC_Order $order, array $names, $phone, $email ) {
+    $fn = trim( (string) ( $names['first_name'] ?? '' ) );
+    $ln = trim( (string) ( $names['last_name'] ?? '' ) );
+
+    $phone_n = yd_normalize_phone_for_yandex_api( $phone );
+    $phone_n = apply_filters( 'yd_recipient_phone_for_yandex', $phone_n, $order, $phone );
+
+    $patronymic = apply_filters( 'yd_recipient_patronymic_for_yandex', '', $order, $names );
+    if ( ! is_string( $patronymic ) ) {
+        $patronymic = '';
+    }
+
+    $email_s = sanitize_email( (string) $email );
+
+    $info = array(
+        'first_name' => $fn,
+        'last_name'  => $ln,
+        'patronymic' => $patronymic,
+        'phone'      => $phone_n,
+        'email'      => $email_s,
+    );
+
+    // ЯД на актах/этикетках показывает ТОЛЬКО first_name.
+    // Чтобы фамилия была видна — кладём полное ФИО в first_name.
+    // Отключить: add_filter('yd_recipient_put_fullname_in_first_name', '__return_false');
+    if ( apply_filters( 'yd_recipient_put_fullname_in_first_name', true, $order, $names ) && $fn !== '' && $ln !== '' && $ln !== '—' ) {
+        $info['first_name'] = trim( $ln . ' ' . $fn );  // Фамилия Имя (как принято в ФИО)
+    }
+
+    return apply_filters( 'yd_recipient_info_for_yandex', $info, $order, $names );
 }
 
 add_action( 'plugins_loaded', 'yd_load_textdomain' );
@@ -1778,7 +1978,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     if ( $markupPercent > 0 ) {
                         $finalCost = $finalCost * ( 1 + $markupPercent / 100 );
                     }
-                    $finalCost = round( $finalCost, 2 );
+                    // Цена доставки для покупателя — целые рубли (API ЯД часто даёт 192,36; в магазине показываем 192 ₽).
+                    $cost_decimals = (int) apply_filters( 'yd_shipping_cost_round_decimals', 0, $this, $package );
+                    $finalCost     = round( $finalCost, $cost_decimals );
 
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[YD] pricing: base=' . $costReceived . ' +add=' . $this->addcost . ' +markup=' . $markupPercent . '% = ' . $finalCost );
@@ -2095,13 +2297,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 // Способ оплаты
                 $paymentTitle  = $order->get_payment_method_title();
                 if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
-                    echo '<p style="color:#b26200;margin:4px 0;">&#128176; Оплата при получении — <strong>' . wc_price( $order->get_total() ) . '</strong></p>';
+                    echo '<p style="color:#b26200;margin:4px 0;">&#128176; Оплата при получении — <strong>' . wp_kses_post( wc_price( $order->get_total(), array( 'decimals' => 0 ) ) ) . '</strong></p>';
                 } else {
                     echo '<p style="color:#059377;margin:4px 0;">&#9989; ' . esc_html( $paymentTitle ) . '</p>';
                 }
 
                 if ( ! empty( $labelLink ) ) {
                     echo '<p><a class="button" href="' . esc_url( $labelLink ) . '" target="_blank" title="Скачать PDF-этикетку для наклейки на посылку. Откроется в новой вкладке.">Скачать этикетку &#10067;</a></p>';
+                } else {
+                    echo '<p><input type="submit" class="button" name="yd_download_label" value="Скачать этикетку" title="Запросить PDF-этикетку из Яндекс Доставки (generate-labels)."></p>';
                 }
 
                 if ( isset( $actLink ) && $actLink !== '' ) {
@@ -2198,10 +2402,10 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 echo '<p><strong>Оплата:</strong> ' . esc_html( $paymentTitle ?: $paymentMethod ) . '</p>';
                 if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
                     echo '<p style="color:#b26200;">&#128176; Оплата при получении</p>';
-                    echo '<p>Сумма к оплате клиентом: <strong>' . wc_price( $orderTotal ) . '</strong></p>';
-                    echo '<p><small>Товары: ' . wc_price( $orderTotal - $shippingCost ) . ' + Доставка: ' . wc_price( $shippingCost ) . '</small></p>';
+                    echo '<p>Сумма к оплате клиентом: <strong>' . wp_kses_post( wc_price( $orderTotal, array( 'decimals' => 0 ) ) ) . '</strong></p>';
+                    echo '<p><small>Товары: ' . wp_kses_post( wc_price( $orderTotal - $shippingCost, array( 'decimals' => 0 ) ) ) . ' + Доставка: ' . wp_kses_post( wc_price( $shippingCost, array( 'decimals' => 0 ) ) ) . '</small></p>';
                 } else {
-                    echo '<p style="color:#059377;">&#9989; Предоплата (' . wc_price( $orderTotal ) . ')</p>';
+                    echo '<p style="color:#059377;">&#9989; Предоплата (' . wp_kses_post( wc_price( $orderTotal, array( 'decimals' => 0 ) ) ) . ')</p>';
                 }
                 echo '<hr style="margin:8px 0;">';
 
@@ -2256,6 +2460,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         elseif ( isset( $_POST['yd_resend_parsel'] ) ) { $action_key = 'resend_' . $postId; }
         elseif ( isset( $_POST['yd_refresh_status'] ) ) { $action_key = 'refresh_' . $postId; }
         elseif ( isset( $_POST['yd_create_act'] ) ) { $action_key = 'act_' . $postId; }
+        elseif ( isset( $_POST['yd_download_label'] ) ) { $action_key = 'label_' . $postId; }
         if ( $action_key && isset( $processed[ $action_key ] ) ) {
             return;
         }
@@ -2263,11 +2468,17 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $processed[ $action_key ] = true;
         }
 
-        // Логируем что хук вызван (всегда в yd-debug.log, для диагностики)
-        yd_log_always( 'HOOK fired for order #' . $postId . ' | POST keys: ' . implode( ',', array_keys( $_POST ) ) );
+        // Логируем что хук вызван (только при debug_mode, чтобы не засорять лог)
+        if ( yd_is_debug( $postId ) ) {
+            yd_log_always( 'HOOK fired for order #' . $postId . ' | POST keys: ' . implode( ',', array_keys( $_POST ) ) );
+        }
 
         if ( ! yd_verify_order_nonce( $postId ) ) {
-            yd_log_always( 'NONCE FAILED for order #' . $postId );
+            // Логируем NONCE FAILED только когда админ нажал кнопку (реальная ошибка),
+            // а не при каждом сохранении заказа (checkout и т.п.)
+            if ( isset( $_POST['yd_create_parsel'] ) ) {
+                yd_log_always( 'NONCE FAILED for order #' . $postId );
+            }
             return;
         }
 
@@ -2305,6 +2516,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
         if ( isset( $_POST['yd_create_act'] ) ) {
             bxbCreateAct( $postId );
+        }
+        if ( isset( $_POST['yd_download_label'] ) ) {
+            yd_download_label_on_demand( $postId );
         }
     }
 
@@ -2384,6 +2598,59 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $order->save();
                 }
             }
+        }
+    }
+
+    /**
+     * Запрашивает этикетку (generate-labels) по требованию админа.
+     */
+    function yd_download_label_on_demand( $postId ) {
+        $order = wc_get_order( $postId );
+        if ( ! $order ) {
+            return;
+        }
+        $shippingData = bxbGetShippingData( $order );
+        if ( ! isset( $shippingData['object'] ) ) {
+            return;
+        }
+        $trackingNumber = $order->get_meta( 'yd_tracking_number' );
+        if ( empty( $trackingNumber ) ) {
+            return;
+        }
+        $key = $shippingData['object']->get_option( 'key' );
+        $yd_client = new Yandex_Delivery_API( $key );
+        $labels = $yd_client->generate_labels( array( $trackingNumber ) );
+
+        if ( is_wp_error( $labels ) ) {
+            $order->update_meta_data( 'yd_error', $labels->get_error_message() );
+            $order->save();
+            return;
+        }
+
+        $labelUrl = '';
+        if ( isset( $labels['url'] ) ) {
+            $labelUrl = $labels['url'];
+        } elseif ( isset( $labels['label_url'] ) ) {
+            $labelUrl = $labels['label_url'];
+        } elseif ( ! empty( $labels['_pdf'] ) ) {
+            $fn = ! empty( $labels['_filename'] ) ? $labels['_filename'] : '';
+            $up = yd_store_pdf_to_uploads( $labels['_pdf'], $fn, 'yd-label-' . $order->get_id() . '-' . time() );
+            if ( empty( $up['error'] ) ) {
+                $labelUrl = $up['url'];
+            } else {
+                $order->update_meta_data( 'yd_error', $up['error'] );
+                $order->save();
+                return;
+            }
+        }
+
+        if ( ! empty( $labelUrl ) ) {
+            $order->update_meta_data( 'yd_link', $labelUrl );
+            $order->delete_meta_data( 'yd_error' );
+            $order->save();
+        } else {
+            $order->update_meta_data( 'yd_error', 'Этикетка ещё не готова. Попробуйте через несколько секунд.' );
+            $order->save();
         }
     }
 
@@ -2547,8 +2814,10 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $sku     = is_callable( array( $product, 'get_sku' ) ) ? $product->get_sku() : '';
                     $id      = (string) ( $sku !== '' ? $sku : $oi['product_id'] );
                     $lineQty = max( 1, (int) $oi->get_quantity() );
-                    $unitPriceRub     = round( ( (float) $oi->get_total() + (float) $oi->get_total_tax() ) / $lineQty, 2 );
-                    $unitPriceKopecks = (int) round( $unitPriceRub * 100 );
+                    // Цены в ЯД без копеек в позиции: целые рубли (книги), в billing_details — кратно 100 коп.
+                    $lineTotalRub     = ( (float) $oi->get_total() + (float) $oi->get_total_tax() ) / $lineQty;
+                    $unitPriceRub     = (int) round( $lineTotalRub );
+                    $unitPriceKopecks = $unitPriceRub * 100;
 
                     $items_list[] = array(
                         'article'         => $id,
@@ -2572,6 +2841,14 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 return;
             }
 
+            // Сумма товаров (копейки) = как total_assessed_price в pricing-calculator / старый request/create
+            $goods_assessed_kop = 0;
+            foreach ( $items_list as $it ) {
+                if ( isset( $it['billing_details']['unit_price'], $it['count'] ) ) {
+                    $goods_assessed_kop += (int) $it['billing_details']['unit_price'] * (int) $it['count'];
+                }
+            }
+
             $places_api = array();
             foreach ( $placesPayload['places'] as $pi => $plEntry ) {
                 $barcode = ( 1 === $numSeg ) ? 'WC' . $orderIdInt : 'WC' . $orderIdInt . '-' . ( $pi + 1 );
@@ -2579,6 +2856,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     array( 'barcode' => $barcode ),
                     $plEntry
                 );
+            }
+
+            $total_weight_g = 0;
+            foreach ( $places_api as $plw ) {
+                if ( isset( $plw['physical_dims']['weight_gross'] ) ) {
+                    $total_weight_g += (int) $plw['physical_dims']['weight_gross'];
+                }
             }
 
             // Определяем адрес отправления
@@ -2631,26 +2915,20 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $orderIdForApi .= '_r' . $resendCount;
             }
 
-            $deliveryCostKopecks = (int) round( (float) $shippingData['cost'] * 100 );
+            // Доставка в ЯД — только целые рубли в API (магазин может считать с копейками).
+            $deliveryCostKopecks = yd_money_rub_to_api_kopecks( (float) $shippingData['cost'] );
+            $delivery_rub_whole  = (int) ( $deliveryCostKopecks / 100 );
 
-            $ship_fn = trim( (string) $order->get_shipping_first_name() );
-            $bill_fn = trim( (string) $order->get_billing_first_name() );
-            $ship_ln = trim( (string) $order->get_shipping_last_name() );
-            $bill_ln = trim( (string) $order->get_billing_last_name() );
+            $recipient_names = yd_order_recipient_names_for_yandex( $order );
 
             $info_comment = sprintf( 'WooCommerce заказ #%s', $order->get_order_number() );
             if ( $isCod ) {
-                $goods_kop = 0;
-                foreach ( $items_list as $it ) {
-                    if ( isset( $it['billing_details']['unit_price'], $it['count'] ) ) {
-                        $goods_kop += (int) $it['billing_details']['unit_price'] * (int) $it['count'];
-                    }
-                }
-                $info_comment .= sprintf(
-                    ' | Постоплата (WooCommerce): товары %s ₽ + доставка %s ₽ = всего %s ₽. В заявке ЯД товары — в items[].billing_details (коп/шт), доставка у получателя — billing_info.delivery_cost.',
-                    wc_format_decimal( $goods_kop / 100, 2 ),
-                    wc_format_decimal( $deliveryCostKopecks / 100, 2 ),
-                    wc_format_decimal( (float) $order->get_total(), 2 )
+                $order_total_whole_rub = round( (float) $order->get_total() );
+                $info_comment          .= sprintf(
+                    ' | Наложенный платёж при получении (card_on_receipt). Товары %s ₽ + доставка %s ₽ = всего %s ₽.',
+                    wc_format_decimal( $goods_assessed_kop / 100, 0 ),
+                    wc_format_decimal( $delivery_rub_whole, 0 ),
+                    wc_format_decimal( $order_total_whole_rub, 0 )
                 );
             }
 
@@ -2662,23 +2940,28 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 ),
                 'source'      => yd_build_source( $sourceAddress, $pointForParcelName ),
                 'destination' => yd_build_destination( $isSelfPickup, $destinationAddress, isset( $yd_code ) ? $yd_code : '', $order ),
-                'recipient_info' => array(
-                    'first_name' => ( $ship_fn !== '' ? $ship_fn : $bill_fn ),
-                    'last_name'  => ( $ship_ln !== '' ? $ship_ln : $bill_ln ),
-                    'phone'      => $customerPhone,
-                    'email'      => $customerEmail,
-                ),
-                'items'  => $items_list,
-                'places' => $places_api,
-                'last_mile_policy' => $isSelfPickup ? 'self_pickup' : 'time_interval',
+                'recipient_info' => yd_build_recipient_info_for_create_request( $order, $recipient_names, $customerPhone, $customerEmail ),
+                'items'                  => $items_list,
+                'places'                 => $places_api,
+                'last_mile_policy'       => $isSelfPickup ? 'self_pickup' : 'time_interval',
+                'total_assessed_price'   => $goods_assessed_kop,
+                'total_weight'           => $total_weight_g,
             );
 
             // billing_info — обязательное поле API ЯД (структура как в справочнике ЯД)
             if ( $isCod ) {
                 $pm_cod = apply_filters( 'yd_billing_payment_method_cod', 'card_on_receipt', $order );
-                $request_data['billing_info'] = array(
-                    'payment_method' => $pm_cod,
-                    'delivery_cost'  => $deliveryCostKopecks,
+                $request_data['billing_info'] = apply_filters(
+                    'yd_billing_info_cod',
+                    array(
+                        'payment_method'   => $pm_cod,
+                        'delivery_cost'    => $deliveryCostKopecks,
+                        // Явная сумма товаров (коп.): в ЛК/наложке часто показывается только delivery_cost, если нет aggregate
+                        'full_items_price' => $goods_assessed_kop,
+                    ),
+                    $order,
+                    $goods_assessed_kop,
+                    $deliveryCostKopecks
                 );
             } else {
                 $request_data['billing_info'] = array(
@@ -2692,6 +2975,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     ),
                 );
             }
+
+            $request_data = yd_request_data_round_money_for_api( $request_data );
 
             yd_log( 'CREATE REQUEST order #' . $orderId . ' | request_data=' . wp_json_encode( $request_data ), $orderId );
 
@@ -2712,23 +2997,12 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             if ( ! empty( $requestId ) ) {
                 $order->update_meta_data( 'yd_tracking_number', $requestId );
 
-                // Пытаемся получить ссылку на этикетку (или PDF → загрузка в uploads)
+                // Этикетку сразу после создания заявки НЕ запрашиваем (409 — ещё не готова).
+                // Если label_url пришёл в ответе create_request — сохраняем, иначе
+                // админ скачает этикетку вручную кнопкой «Скачать этикетку» в мета-боксе.
                 $labelUrl = '';
                 if ( isset( $answer['label_url'] ) ) {
                     $labelUrl = $answer['label_url'];
-                } else {
-                    $labels = $yd_client->generate_labels( array( $requestId ) );
-                    if ( ! is_wp_error( $labels ) && isset( $labels['url'] ) ) {
-                        $labelUrl = $labels['url'];
-                    } elseif ( ! is_wp_error( $labels ) && isset( $labels['label_url'] ) ) {
-                        $labelUrl = $labels['label_url'];
-                    } elseif ( ! is_wp_error( $labels ) && ! empty( $labels['_pdf'] ) ) {
-                        $fn = ! empty( $labels['_filename'] ) ? $labels['_filename'] : '';
-                        $up = yd_store_pdf_to_uploads( $labels['_pdf'], $fn, 'yd-label-' . $order->get_id() . '-' . time() );
-                        if ( empty( $up['error'] ) ) {
-                            $labelUrl = $up['url'];
-                        }
-                    }
                 }
 
                 $info = $yd_client->get_request_info( $requestId );
@@ -4152,6 +4426,42 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         echo '</div>';
     }
 
+    /**
+     * ЛК клиента / просмотр заказа: та же ссылка отслеживания Яндекса, что в письме (без отдельной страницы на сайте).
+     */
+    add_action( 'woocommerce_order_details_after_order_table', 'yd_customer_order_yandex_tracking_block', 15, 1 );
+    function yd_customer_order_yandex_tracking_block( $order ) {
+        if ( ! $order instanceof WC_Order ) {
+            return;
+        }
+        $ship = bxbGetShippingData( $order );
+        if ( empty( $ship['method_id'] ) || strpos( $ship['method_id'], 'yd' ) === false ) {
+            return;
+        }
+        $rid = $order->get_meta( 'yd_tracking_number' );
+        if ( $rid === '' ) {
+            return;
+        }
+        $courier = $order->get_meta( 'yd_courier_order_id' );
+        $share   = $order->get_meta( 'yd_sharing_url' );
+        $pvcode  = $order->get_meta( 'yd_pickup_code' );
+        echo '<section class="woocommerce-yd-tracking" style="margin:18px 0;padding:14px;border:1px solid #ddd;border-radius:6px;background:#f7f7f7;font-size:14px;line-height:1.5;">';
+        echo '<h2 style="margin:0 0 10px;font-size:1.1em;">' . esc_html__( 'Яндекс Доставка', 'yandex-dostavka' ) . '</h2>';
+        echo '<p style="margin:4px 0;"><strong>' . esc_html__( 'Номер заявки:', 'yandex-dostavka' ) . '</strong> ' . esc_html( $rid ) . '</p>';
+        if ( $courier ) {
+            echo '<p style="margin:4px 0;"><strong>' . esc_html__( 'Трек оператора:', 'yandex-dostavka' ) . '</strong> ' . esc_html( $courier ) . '</p>';
+        }
+        if ( $pvcode ) {
+            echo '<p style="margin:4px 0;"><strong>' . esc_html__( 'Код в пункте выдачи:', 'yandex-dostavka' ) . '</strong> ' . esc_html( $pvcode ) . '</p>';
+        }
+        if ( $share ) {
+            echo '<p style="margin:12px 0 0;"><a class="button" href="' . esc_url( $share ) . '" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 16px;background:#fc3f1e;color:#fff;text-decoration:none;border-radius:4px;font-weight:600;">' . esc_html__( 'Отследить доставку на сайте Яндекса', 'yandex-dostavka' ) . '</a></p>';
+        } else {
+            echo '<p style="margin:10px 0 0;color:#555;font-size:13px;">' . esc_html__( 'Персональная ссылка на отслеживание появится после обработки заявки Яндексом; обычно также приходит SMS со ссылкой.', 'yandex-dostavka' ) . '</p>';
+        }
+        echo '</section>';
+    }
+
     // Заголовок формы: «Ваши данные» — ловим и английский оригинал, и русский перевод
     add_filter( 'gettext', function( $translated, $text, $domain ) {
         if ( $domain === 'woocommerce' && ( $text === 'Billing details' || $translated === 'Оплата и доставка' ) ) {
@@ -4363,7 +4673,7 @@ function yd_render_order_column_content( $order ) {
         }
         // Оплата при получении
         if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
-            echo '<br><span style="font-size:10px;color:#b26200;">&#128176; ' . strip_tags( wc_price( $order->get_total() ) ) . '</span>';
+            echo '<br><span style="font-size:10px;color:#b26200;">&#128176; ' . esc_html( strip_tags( wc_price( $order->get_total(), array( 'decimals' => 0 ) ) ) ) . '</span>';
         }
     } elseif ( $error ) {
         echo '<span style="color:#c00;font-size:11px;" title="' . esc_attr( $error ) . '">&#10060; ошибка</span>';
