@@ -147,18 +147,28 @@ function ndResetPvzSelection() {
 
 /** Показать блок с выбранным ПВЗ рядом с кнопкой */
 function ndShowPvzSelected(address) {
-    jQuery('.nd-pvz-selected').remove();
     if (!address) return;
+
+    // Если блок уже есть с тем же адресом — не пересоздаём
+    var $existing = jQuery('.nd-pvz-selected');
+    if ($existing.length && $existing.data('pvz-addr') === address) return;
+
+    $existing.remove();
+
     var $info = jQuery('<div class="nd-pvz-selected" style="margin:8px 0 4px 15px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:14px;color:#166534;"></div>')
-        .html('<strong>ПВЗ:</strong> ' + jQuery('<span>').text(address).html());
+        .html('<strong>ПВЗ:</strong> ' + jQuery('<span>').text(address).html())
+        .data('pvz-addr', address);
+
     // Вставляем после ссылки "Выберите пункт выдачи"
     var $link = jQuery('a[data-yandex-dostavka-open="true"]').first();
     if ($link.length) {
         $link.closest('p').length ? $link.closest('p').after($info) : $link.after($info);
     } else {
-        // Фоллбэк: вставляем после кнопки
-        var $btn = jQuery('.bxbbutton, .nd-button').first();
-        if ($btn.length) { $btn.closest('p').after($info); }
+        // Фоллбэк: после метода доставки yd_self
+        var $method = jQuery('input[value*="yd_self"]').closest('li, tr, .woocommerce-shipping-methods');
+        if ($method.length) {
+            $method.after($info);
+        }
     }
 }
 
@@ -194,34 +204,39 @@ function getCityField(){
 }
 
 jQuery(document.body).on('updated_checkout', function () {
-    // WC перерисовывает DOM — восстанавливаем выбранный ПВЗ с задержкой
-    setTimeout(function() {
-        var elements = jQuery('a[data-yandex-dostavka-open="true"]');
-
-        if (elements.length && ydWidgetSelectedPointAddress) {
-            elements.each(function() {
-                jQuery(this).text(ydWidgetSelectedPointAddress);
-            });
-        }
-
-        // Восстанавливаем из cookie если переменная потерялась (например при reload)
+    // WC перерисовывает DOM — восстанавливаем выбранный ПВЗ
+    // Несколько попыток с разной задержкой (WC может рисовать DOM асинхронно)
+    function ndRestorePvzAfterUpdate() {
+        // Восстанавливаем из cookie если переменная потерялась
         if (!ydWidgetSelectedPointAddress) {
             var cookieAddr = ndGetCookie('yd_pvz_address');
             var cookieCode = ndGetCookie('yd_pvz_code');
             if (cookieAddr && cookieCode) {
                 ydWidgetSelectedPointAddress = decodeURIComponent(cookieAddr);
                 ydWidgetPointCode = decodeURIComponent(cookieCode);
-                if (elements.length) {
-                    elements.each(function() { jQuery(this).text(ydWidgetSelectedPointAddress); });
-                }
             }
         }
 
-        // Показываем зелёный блок с выбранным ПВЗ
-        if (ydWidgetSelectedPointAddress) {
-            ndShowPvzSelected(ydWidgetSelectedPointAddress);
+        if (!ydWidgetSelectedPointAddress) return;
+
+        var elements = jQuery('a[data-yandex-dostavka-open="true"]');
+        if (elements.length) {
+            elements.each(function() {
+                jQuery(this).text(ydWidgetSelectedPointAddress);
+            });
         }
 
+        // Показываем зелёный блок с выбранным ПВЗ
+        ndShowPvzSelected(ydWidgetSelectedPointAddress);
+    }
+
+    // Пробуем несколько раз — WC может обновлять DOM с разной скоростью
+    ndRestorePvzAfterUpdate();
+    setTimeout(ndRestorePvzAfterUpdate, 150);
+    setTimeout(ndRestorePvzAfterUpdate, 500);
+    setTimeout(ndRestorePvzAfterUpdate, 1000);
+
+    setTimeout(function() {
         ndMaybeAttachAddressSuggest();
         ndToggleAddressField();
     }, 100);
