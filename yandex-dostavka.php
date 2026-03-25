@@ -767,25 +767,18 @@ add_action( 'admin_menu', 'yd_admin_menus', 99 );
 function yd_admin_menus() {
     add_submenu_page(
         'woocommerce',
-        'ЯД — Настройки API',
-        'ЯД — Настройки API',
+        'Яндекс Доставка',
+        'Яндекс Доставка',
         'manage_woocommerce',
-        'yandex-dostavka-dadata',
-        'yd_dadata_page'
-    );
-    add_submenu_page(
-        'woocommerce',
-        'Тестовый режим',
-        'Тестовый режим',
-        'manage_woocommerce',
-        'yandex-dostavka-test-mode',
-        'yd_test_mode_page'
+        'yandex-dostavka-settings',
+        'yd_settings_page'
     );
 }
 
-function yd_dadata_page() {
-    if ( isset( $_POST['yd_save_dadata'] ) ) {
-        check_admin_referer( 'yd_dadata' );
+function yd_settings_page() {
+    // Сохранение настроек
+    if ( isset( $_POST['yd_save_settings'] ) ) {
+        check_admin_referer( 'yd_settings' );
         $dadata_key = isset( $_POST['yd_dadata_api_key'] )
             ? sanitize_text_field( wp_unslash( $_POST['yd_dadata_api_key'] ) )
             : '';
@@ -799,11 +792,17 @@ function yd_dadata_page() {
     }
     $dadata_key = get_option( 'yd_dadata_api_key', '' );
     $ymaps_key  = get_option( 'yd_ymaps_api_key', '' );
+    $is_test    = get_option( 'yd_test_mode', 'no' ) === 'yes';
+    $nonce_test = wp_create_nonce( 'yd_toggle_test_mode' );
     ?>
     <div class="wrap">
-        <h1>Настройки API</h1>
-        <form method="post" style="max-width:600px;margin-top:20px;">
-            <?php wp_nonce_field( 'yd_dadata' ); ?>
+        <h1>Яндекс Доставка — Настройки</h1>
+
+        <form method="post" style="max-width:700px;margin-top:20px;">
+            <?php wp_nonce_field( 'yd_settings' ); ?>
+
+            <!-- API-ключи -->
+            <h2>API-ключи</h2>
             <table class="form-table">
                 <tr>
                     <th scope="row"><label for="yd_dadata_api_key">Dadata API-ключ</label></th>
@@ -814,7 +813,7 @@ function yd_dadata_page() {
                                placeholder="Вставьте API-ключ Dadata" />
                         <p class="description">
                             Из <a href="https://dadata.ru/profile/#info" target="_blank" rel="noopener">личного кабинета Dadata</a> &rarr; «API-ключи».
-                            Используется для подсказок города и адреса.
+                            Подсказки города и адреса на чекауте.
                         </p>
                     </td>
                 </tr>
@@ -827,44 +826,43 @@ function yd_dadata_page() {
                                placeholder="Вставьте API-ключ Яндекс Карт" />
                         <p class="description">
                             Из <a href="https://developer.tech.yandex.ru/services" target="_blank" rel="noopener">кабинета разработчика Яндекс</a> &rarr; JavaScript API и HTTP Геокодер.
-                            Используется для карты выбора ПВЗ на чекауте.
+                            Карта выбора ПВЗ на чекауте.
                         </p>
                     </td>
                 </tr>
             </table>
+
             <p class="submit">
-                <input type="submit" name="yd_save_dadata" class="button-primary" value="Сохранить" />
+                <input type="submit" name="yd_save_settings" class="button-primary" value="Сохранить настройки" />
             </p>
         </form>
-    </div>
-    <?php
-}
 
-function yd_test_mode_page() {
-    $is_on = get_option( 'yd_test_mode', 'no' ) === 'yes';
-    $nonce = wp_create_nonce( 'yd_toggle_test_mode' );
-    ?>
-    <div class="wrap">
-        <h1>Тестовый режим магазина</h1>
-        <div style="max-width:600px;margin-top:20px;padding:20px;background:#fff;border:1px solid #ccd0d4;border-radius:4px;">
-            <p style="font-size:14px;margin-top:0;">
-                Когда тестовый режим включён, неавторизованные пользователи видят заглушку
-                «Магазин обновляется» на страницах корзины и оформления заказа.
-                Авторизованные пользователи работают с магазином как обычно.
+        <!-- Тестовый режим -->
+        <hr style="margin:30px 0;">
+        <h2>Тестовый режим</h2>
+        <div style="max-width:700px;padding:16px 20px;background:#fff;border:1px solid #ccd0d4;border-radius:4px;">
+            <p style="margin-top:0;color:#666;">
+                Когда включён — неавторизованные пользователи видят заглушку на чекауте и корзине.
+                Авторизованные работают как обычно.
             </p>
-            <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
-                <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:<?php echo $is_on ? '#dc3232' : '#46b450'; ?>;"></span>
-                <strong><?php echo $is_on ? 'Тестовый режим ВКЛЮЧЁН' : 'Тестовый режим выключен'; ?></strong>
-            </div>
-            <p style="margin-top:16px;">
-                <button type="button" class="button <?php echo $is_on ? 'button-secondary' : 'button-primary'; ?>"
-                        id="yd-toggle-test-mode" data-nonce="<?php echo esc_attr( $nonce ); ?>">
-                    <?php echo $is_on ? 'Выключить тестовый режим' : 'Включить тестовый режим'; ?>
+            <div style="display:flex;align-items:center;gap:12px;">
+                <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:<?php echo $is_test ? '#dc3232' : '#46b450'; ?>;"></span>
+                <strong><?php echo $is_test ? 'Тестовый режим ВКЛЮЧЁН' : 'Тестовый режим выключен'; ?></strong>
+                <button type="button" class="button <?php echo $is_test ? 'button-secondary' : ''; ?>"
+                        id="yd-toggle-test-mode" data-nonce="<?php echo esc_attr( $nonce_test ); ?>" style="margin-left:12px;">
+                    <?php echo $is_test ? 'Выключить' : 'Включить'; ?>
                 </button>
-            </p>
+            </div>
         </div>
+
+        <!-- Ссылки -->
+        <hr style="margin:30px 0;">
+        <h2>Методы доставки</h2>
+        <p>Настройки OAuth-токена, склада, наценок и автоотправки — в параметрах каждого метода доставки:</p>
+        <p><a href="<?php echo esc_url( admin_url( 'admin.php?page=wc-settings&tab=shipping' ) ); ?>" class="button">WooCommerce &rarr; Доставка &rarr; Зоны доставки</a></p>
+
     </div>
-    <script>document.addEventListener('DOMContentLoaded',function(){var btn=document.getElementById('yd-toggle-test-mode');if(btn){btn.addEventListener('click',function(){btn.disabled=true;btn.textContent='...';fetch(ajaxurl+'?action=yd_toggle_test_mode&_wpnonce='+btn.dataset.nonce).then(function(r){return r.json()}).then(function(){location.reload()}).catch(function(){btn.disabled=false;btn.textContent='Ошибка, попробуйте снова'})})}});</script>
+    <script>document.addEventListener('DOMContentLoaded',function(){var btn=document.getElementById('yd-toggle-test-mode');if(btn){btn.addEventListener('click',function(){btn.disabled=true;btn.textContent='...';fetch(ajaxurl+'?action=yd_toggle_test_mode&_wpnonce='+btn.dataset.nonce).then(function(r){return r.json()}).then(function(){location.reload()}).catch(function(){btn.disabled=false;btn.textContent='Ошибка'})})}});</script>
     <?php
 }
 
