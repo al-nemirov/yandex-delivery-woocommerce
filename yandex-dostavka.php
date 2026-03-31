@@ -2240,7 +2240,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             ];
 
             if ( isset( $errorText ) && empty( $trackingNumber ) && $errorText !== '' ) {
-                echo '<p><b><u>Возникла ошибка</u></b>: ' . wp_kses_post( $errorText ) . '</p>';
+                echo '<p><b><u>Возникла ошибка</u></b>: ' . esc_html( $errorText ) . '</p>';
                 echo '<p><input type="submit" class="add_note button" name="yd_create_parsel" value="Попробовать снова" title="Повторно отправить заказ в Яндекс Доставку. Предыдущая попытка завершилась ошибкой."></p>';
 
                 // Дебаг-лог при ошибке
