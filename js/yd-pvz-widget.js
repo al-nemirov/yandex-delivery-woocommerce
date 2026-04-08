@@ -11,12 +11,14 @@
         selectedPoint: null,
         onSelect: null,
         city: '',
+        paymentAfter: false,
 
-        open: function(city, onSelectCallback) {
-            console.log('[YD_PVZ] open() called, city:', city);
+        open: function(city, onSelectCallback, paymentAfter) {
+            console.log('[YD_PVZ] open() called, city:', city, 'paymentAfter:', paymentAfter);
             try {
             this.city = city || '';
             this.onSelect = onSelectCallback;
+            this.paymentAfter = !!paymentAfter;
             this.createModal();
             console.log('[YD_PVZ] modal created, loading points...');
             this.loadPoints(city);
@@ -103,6 +105,7 @@
             fd.append('action', 'yd_get_pvz_points');
             fd.append('nonce', window.wp_data.yd_nonce || '');
             fd.append('city', city);
+            fd.append('payment_after', this.paymentAfter ? '1' : '0');
 
             console.log('[YD_PVZ] Fetching points for city:', city, 'url:', window.wp_data.ajax_url);
             fetch(window.wp_data.ajax_url, { method: 'POST', body: fd })
@@ -138,7 +141,8 @@
                 var item = document.createElement('div');
                 item.style.cssText = 'padding:12px 16px;border-bottom:1px solid #f0f0f1;cursor:pointer;transition:background 0.15s;';
                 item.innerHTML = '<div style="font-weight:600;font-size:14px;margin-bottom:4px;">' + self.esc(p.address) + '</div>' +
-                    (p.schedule ? '<div style="font-size:12px;color:#666;">' + self.esc(p.schedule) + '</div>' : '');
+                    (p.schedule ? '<div style="font-size:12px;color:#666;">' + self.esc(p.schedule) + '</div>' : '') +
+                    (p.cash_allowed === 0 ? '<div style="font-size:11px;color:#e65100;margin-top:3px;">⚠ Только онлайн-оплата</div>' : '');
                 item.addEventListener('mouseenter', function() { this.style.background = '#f0f7ff'; });
                 item.addEventListener('mouseleave', function() { this.style.background = ''; });
                 item.addEventListener('click', function() {
@@ -210,6 +214,7 @@
                         {
                             balloonContentHeader: '<strong style="font-size:14px;">' + self.esc(p.address) + '</strong>',
                             balloonContentBody: (p.schedule ? '<div style="margin:4px 0;color:#666;">' + self.esc(p.schedule) + '</div>' : '') +
+                                (p.cash_allowed === 0 ? '<div style="margin:6px 0;padding:6px 10px;background:#fff3e0;border-left:3px solid #e65100;font-size:12px;color:#bf360c;">⚠ В этом ПВЗ возможна только онлайн-оплата</div>' : '') +
                                 '<button data-yd-pvz-select="' + self.esc(p.id) + '" style="margin-top:8px;padding:8px 20px;background:#FFD60A;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;">Выбрать этот ПВЗ</button>',
                             hintContent: p.address
                         },
@@ -244,6 +249,7 @@
 
             document.cookie = 'yd_pvz_code=' + encodeURIComponent(point.id) + ';path=/;SameSite=Lax';
             document.cookie = 'yd_pvz_address=' + encodeURIComponent(point.address || '') + ';path=/;SameSite=Lax';
+            document.cookie = 'yd_pvz_cash_allowed=' + (point.cash_allowed === 0 ? '0' : '1') + ';path=/;SameSite=Lax';
 
             if (typeof this.onSelect === 'function') {
                 this.onSelect(point);

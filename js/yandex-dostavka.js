@@ -89,6 +89,7 @@ jQuery(document).on('click', function (e) {
                     formData.append('method', method);
                     formData.append('code', ydWidgetPointCode);
                     formData.append('address', ydWidgetSelectedPointAddress);
+                    formData.append('cash_allowed', typeof result.cash_allowed !== 'undefined' ? (result.cash_allowed ? '1' : '0') : '1');
                     ndAjaxPost(formData).then(function (){
                         jQuery(document.body).trigger('update_checkout');
                     });
@@ -121,13 +122,16 @@ jQuery(document).on('click', function (e) {
             }
 
             if (typeof YD_PVZ !== 'undefined') {
+                // Определяем требует ли метод доставки поддержки COD
+                var isPaymentAfter = (method === 'yd_self_after' || method === 'yd_courier_after');
                 YD_PVZ.open(pvzCity, function(point) {
                     pointSelectedHandler({
                         id: point.id,
                         name: point.name || pvzCity,
-                        address: point.address || ''
+                        address: point.address || '',
+                        cash_allowed: point.cash_allowed
                     });
-                });
+                }, isPaymentAfter);
             } else {
                 alert('Виджет выбора ПВЗ не загружен. Обновите страницу.');
             }
@@ -139,6 +143,7 @@ jQuery(document).on('click', function (e) {
 function ndResetPvzSelection() {
     ndDeleteCookie('yd_pvz_code');
     ndDeleteCookie('yd_pvz_address');
+    ndDeleteCookie('yd_pvz_cash_allowed');
     ydWidgetSelectedPointAddress = false;
     ydWidgetPointCode = false;
     ydWidgetPointName = false;

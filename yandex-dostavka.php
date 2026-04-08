@@ -941,6 +941,19 @@ function yd_run_updates()
         }
     }
 
+    // Добавить колонку cash_allowed (флаг поддержки наложенного платежа в ПВЗ)
+    if ( yd_is_reception_points_table_exist() && ! get_option( 'yd_reception_points_v3' ) ) {
+        global $wpdb;
+        $t    = $wpdb->prefix . 'yd_reception_points';
+        $cols = $wpdb->get_col( "DESCRIBE `{$t}`", 0 );
+        if ( ! in_array( 'cash_allowed', $cols ) ) {
+            // DEFAULT 1 = считаем ПВЗ принимает COD, пока не перезагрузим данные
+            $wpdb->query( "ALTER TABLE `{$t}` ADD COLUMN cash_allowed TINYINT(1) NOT NULL DEFAULT 1" );
+            error_log( '[YD] Migration v3: added cash_allowed column' );
+        }
+        update_option( 'yd_reception_points_v3', 1 );
+    }
+
     if (!yd_is_reception_points_table_exist()) {
         yd_create_reception_points_table();
     }
@@ -1456,6 +1469,20 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                             2 => 'Ко всему отправлению целиком',
                         ],
                     ),
+                    'size_attribute' => array(
+                        'title'       => 'Атрибут размера для веса',
+                        'description' => 'Slug атрибута WooCommerce (например, pa_razmer). Если у товара есть этот атрибут и значение совпадает с маппингом ниже — вес берётся из маппинга.',
+                        'desc_tip'    => true,
+                        'type'        => 'text',
+                        'default'     => 'pa_razmer',
+                    ),
+                    'size_weight_map' => array(
+                        'title'       => 'Маппинг размер → вес (кг)',
+                        'description' => 'Формат: S=2, M=5, L=12, XL=15, XXL=20, XXL+=30, КГТ=200. Значения в кг.',
+                        'type'        => 'textarea',
+                        'default'     => 'S=2, M=5, L=12, XL=15, XXL=20, XXL+=30, КГТ=200',
+                        'css'         => 'width:100%; height:60px;',
+                    ),
                     // check_zip removed: option was registered but never read in PHP calculation logic
                     'addcost'                             => array(
                         'title'       => 'Наценка фиксированная (₽)',
@@ -1499,6 +1526,19 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         'desc_tip'          => true,
                         'custom_attributes' => array(
                             'data-placeholder' => 'Выберите способы оплаты'
+                        )
+                    ),
+                    'pvz_non_cod_gateways'                => array(
+                        'title'             => 'Оплата в ПВЗ без наложенного платежа',
+                        'type'              => 'multiselect',
+                        'class'             => 'wc-enhanced-select',
+                        'css'               => 'width: 400px;',
+                        'default'           => '',
+                        'description'       => 'Какие способы оплаты доступны покупателю, если выбранный ПВЗ не принимает оплату при получении. Если не заполнено — ограничений нет.',
+                        'options'           => $this->get_available_payment_methods(),
+                        'desc_tip'          => true,
+                        'custom_attributes' => array(
+                            'data-placeholder' => 'Выберите разрешённые способы оплаты'
                         )
                     ),
                     'bxbbutton'                           => array(
@@ -2062,10 +2102,129 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         return $form5;
     }
 
+    /**
+     * Парсит строку маппинга размер→вес.
+     *
+     * @param string $map_string Строка вида "S=2, M=5, L=12"
+     * @return array Ассоциативный массив ['s' => 2000, 'm' => 5000, ...] (значения в граммах)
+     */
+    function yd_parse_size_weight_map( $map_string ) {
+        $map = array();
+        if ( empty( $map_string ) ) {
+            return $map;
+        }
+        $pairs = preg_split( '/\s*,\s*/', trim( $map_string ) );
+        foreach ( $pairs as $pair ) {
+            $parts = explode( '=', $pair, 2 );
+            if ( count( $parts ) === 2 ) {
+                $size   = mb_strtolower( trim( $parts[0] ) );
+                $weight = (float) trim( $parts[1] );
+                if ( $size !== '' && $weight > 0 ) {
+                    $map[ $size ] = (int) round( $weight * 1000 ); // кг → граммы
+                }
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * Получает вес товара по атрибуту размера из маппинга.
+     *
+     * @param WC_Product $product Товар.
+     * @param int        $id      Variation ID.
+     * @param string     $size_attr Slug атрибута размера.
+     * @param array      $weight_map Маппинг размер→вес (в граммах).
+     * @return float|false Вес в единицах WC (кг) или false если не найден.
+     */
+    function yd_get_weight_by_size( $product, $id, $size_attr, $weight_map ) {
+        if ( empty( $size_attr ) || empty( $weight_map ) ) {
+            return false;
+        }
+
+        $size_value = '';
+
+        // Для вариации — берём атрибут из вариации
+        if ( $id > 0 ) {
+            $variation = wc_get_product( $id );
+            if ( $variation && is_a( $variation, 'WC_Product_Variation' ) ) {
+                $attr_key   = 'attribute_' . $size_attr;
+                $size_value = $variation->get_attribute( $size_attr );
+                if ( empty( $size_value ) ) {
+                    $size_value = get_post_meta( $id, $attr_key, true );
+                }
+            }
+        }
+
+        // Для простого товара или если вариация не дала значения
+        if ( empty( $size_value ) && $product ) {
+            $size_value = $product->get_attribute( $size_attr );
+        }
+
+        if ( empty( $size_value ) ) {
+            return false;
+        }
+
+        $size_key = mb_strtolower( trim( $size_value ) );
+        if ( isset( $weight_map[ $size_key ] ) ) {
+            // Возвращаем в кг (WC единицы), т.к. weight_map хранит граммы
+            $wc_unit = strtolower( get_option( 'woocommerce_weight_unit', 'kg' ) );
+            if ( $wc_unit === 'g' ) {
+                return (float) $weight_map[ $size_key ];
+            }
+            return (float) $weight_map[ $size_key ] / 1000;
+        }
+
+        return false;
+    }
+
+    /**
+     * Получить настройки size_attribute и size_weight_map из первого экземпляра
+     * метода доставки YD в зонах WooCommerce. Результат кэшируется за запрос.
+     *
+     * @return array ['size_attr' => string, 'weight_map' => array]
+     */
+    function yd_get_size_weight_settings() {
+        static $cached = null;
+        if ( $cached !== null ) {
+            return $cached;
+        }
+        $cached = array( 'size_attr' => '', 'weight_map' => array() );
+
+        $yd_method_ids = array( 'yd_self', 'yd_self_after', 'yd_courier', 'yd_courier_after' );
+
+        $zones = WC_Shipping_Zones::get_zones();
+        $zones[] = array( 'zone_id' => 0 ); // Зона «Остальные»
+        foreach ( $zones as $zone_data ) {
+            $zone    = WC_Shipping_Zones::get_zone( $zone_data['zone_id'] );
+            $methods = $zone->get_shipping_methods( true ); // только включённые
+            foreach ( $methods as $method ) {
+                if ( in_array( $method->id, $yd_method_ids, true ) ) {
+                    $size_attr  = $method->get_option( 'size_attribute', 'pa_razmer' );
+                    $map_string = $method->get_option( 'size_weight_map', '' );
+                    $weight_map = yd_parse_size_weight_map( $map_string );
+                    if ( ! empty( $weight_map ) ) {
+                        $cached = array( 'size_attr' => $size_attr, 'weight_map' => $weight_map );
+                        return $cached;
+                    }
+                }
+            }
+        }
+        return $cached;
+    }
+
     function bxbGetWeight( $product, $id = 0 )
     {
         if ( ! $product ) {
             return 0;
+        }
+
+        // Попытка определить вес по маппингу размер→вес
+        $settings = yd_get_size_weight_settings();
+        if ( ! empty( $settings['weight_map'] ) ) {
+            $size_weight = yd_get_weight_by_size( $product, $id, $settings['size_attr'], $settings['weight_map'] );
+            if ( $size_weight !== false ) {
+                return $size_weight;
+            }
         }
 
         if ( $product->is_type( 'variable' ) && $id > 0 ) {
@@ -2096,6 +2255,79 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     }
 
     add_filter( 'woocommerce_shipping_methods', 'yd_shipping_method' );
+
+    /**
+     * Фильтрует доступные способы оплаты на чекауте, если выбранный ПВЗ
+     * не принимает наложенный платёж (yd_pvz_cash_allowed=0).
+     * Список разрешённых способов берётся из настройки pvz_non_cod_gateways
+     * метода доставки yd_self / yd_self_after.
+     */
+    add_filter( 'woocommerce_available_payment_gateways', function( $gateways ) {
+        if ( is_admin() && ! defined( 'DOING_AJAX' ) ) {
+            return $gateways;
+        }
+
+        // Проверяем куки — ПВЗ выбран и не принимает наличные
+        $cash_allowed = isset( $_COOKIE['yd_pvz_cash_allowed'] )
+            ? sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_cash_allowed'] ) )
+            : '1';
+        if ( $cash_allowed !== '0' ) {
+            return $gateways;
+        }
+
+        // Убеждаемся что выбран ПВЗ-метод Яндекс Доставки
+        $chosen = array();
+        if ( function_exists( 'WC' ) && WC()->session ) {
+            $chosen = (array) WC()->session->get( 'chosen_shipping_methods', array() );
+        }
+        $pvz_methods = array( 'yd_self', 'yd_self_after' );
+        $is_yd_pvz   = false;
+        foreach ( $chosen as $method_id ) {
+            $base = explode( ':', $method_id )[0];
+            if ( in_array( $base, $pvz_methods, true ) ) {
+                $is_yd_pvz = true;
+                break;
+            }
+        }
+        if ( ! $is_yd_pvz ) {
+            return $gateways;
+        }
+
+        // Ищем настройку pvz_non_cod_gateways в первом активном yd_self/yd_self_after методе
+        $allowed_ids = array();
+        $zones       = WC_Shipping_Zones::get_zones();
+        $zones[]     = array( 'id' => 0 ); // «Остальные регионы»
+        foreach ( $zones as $zone_data ) {
+            if ( ! empty( $allowed_ids ) ) {
+                break;
+            }
+            $zone = new WC_Shipping_Zone( $zone_data['id'] );
+            foreach ( $zone->get_shipping_methods( true ) as $method ) {
+                if ( in_array( $method->id, $pvz_methods, true ) ) {
+                    $setting = $method->get_option( 'pvz_non_cod_gateways', array() );
+                    if ( ! empty( $setting ) && is_array( $setting ) ) {
+                        $allowed_ids = $setting;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Если настройка пустая — убираем только стандартный COD-шлюз WooCommerce
+        if ( empty( $allowed_ids ) ) {
+            unset( $gateways['cod'] );
+            return $gateways;
+        }
+
+        // Оставляем только явно разрешённые шлюзы
+        foreach ( array_keys( $gateways ) as $gateway_id ) {
+            if ( ! in_array( $gateway_id, $allowed_ids, true ) ) {
+                unset( $gateways[ $gateway_id ] );
+            }
+        }
+
+        return $gateways;
+    } );
 
     /**
      * Включаем PVZ code в хэш пакета доставки, чтобы WooCommerce
@@ -2819,6 +3051,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $numSeg     = count( $segments );
             $items_list = array();
 
+            $weightC = yd_unit_coefficients()['weight_c'];
+
             foreach ( $segments as $segIndex => $seg ) {
                 $barcode = ( 1 === $numSeg ) ? 'WC' . $orderIdInt : 'WC' . $orderIdInt . '-' . ( $segIndex + 1 );
                 foreach ( $seg as $entry ) {
@@ -2835,12 +3069,17 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $unitPriceRub     = (int) round( $lineTotalRub );
                     $unitPriceKopecks = $unitPriceRub * 100;
 
+                    // Вес единицы товара в граммах для ЯД (items[].weight на этикетке)
+                    $varId       = isset( $entry['variation_id'] ) ? (int) $entry['variation_id'] : 0;
+                    $rawWeightG  = (float) bxbGetWeight( $product, $varId ) * $weightC;
+                    $itemWeightG = $rawWeightG > 0 ? (int) ceil( $rawWeightG ) : (int) ceil( $defaultWeight );
+
                     $items_list[] = array(
                         'article'         => $id,
                         'name'            => $oi->get_name(),
                         'price'           => $unitPriceRub,
                         'count'           => (int) $entry['quantity'],
-                        'weight'          => 0,
+                        'weight'          => $itemWeightG,
                         'place_barcode'   => $barcode,
                         'billing_details' => array(
                             'unit_price'          => $unitPriceKopecks,
@@ -3446,7 +3685,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         // P2 Fix: проверка nonce — используем yd_update + поле nonce (согласовано с wp_data.yd_nonce на клиенте)
         check_ajax_referer( 'yd_update', 'nonce' );
 
-        $city = isset( $_POST['city'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['city'] ) ) ) : '';
+        $city         = isset( $_POST['city'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['city'] ) ) ) : '';
+        $payment_after = isset( $_POST['payment_after'] ) && ( $_POST['payment_after'] === '1' || $_POST['payment_after'] === 1 );
 
         if ( empty( $city ) ) {
             wp_send_json_error( array( 'message' => 'City is required' ) );
@@ -3473,9 +3713,18 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
 
         // Ищем в локальной БД по городу (LIKE — "Мытищ" найдёт "Мытищи")
-        $like = '%' . $wpdb->esc_like( $city ) . '%';
+        // Для метода с COD (payment_after=1) показываем только ПВЗ, принимающие наложенный платёж
+        $like      = '%' . $wpdb->esc_like( $city ) . '%';
+        $cod_where = $payment_after ? ' AND cash_allowed = 1' : '';
+
+        // Проверяем есть ли колонка cash_allowed (на случай если миграция не прошла)
+        $cols = $wpdb->get_col( "DESCRIBE `{$table}`", 0 );
+        if ( ! in_array( 'cash_allowed', $cols ) ) {
+            $cod_where = ''; // фоллбэк: не фильтруем
+        }
+
         $results = $wpdb->get_results( $wpdb->prepare(
-            "SELECT code, name, city, lat, lng, schedule FROM `{$table}` WHERE city LIKE %s ORDER BY name LIMIT 500",
+            "SELECT code, name, city, lat, lng, schedule" . ( in_array( 'cash_allowed', $cols ) ? ', cash_allowed' : ', 1 AS cash_allowed' ) . " FROM `{$table}` WHERE city LIKE %s{$cod_where} ORDER BY name LIMIT 500",
             $like
         ) );
 
@@ -3483,7 +3732,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             // Второй вариант — первые 3 символа
             $short = mb_substr( $city, 0, 3 );
             $results = $wpdb->get_results( $wpdb->prepare(
-                "SELECT code, name, city, lat, lng, schedule FROM `{$table}` WHERE city LIKE %s ORDER BY name LIMIT 500",
+                "SELECT code, name, city, lat, lng, schedule" . ( in_array( 'cash_allowed', $cols ) ? ', cash_allowed' : ', 1 AS cash_allowed' ) . " FROM `{$table}` WHERE city LIKE %s{$cod_where} ORDER BY name LIMIT 500",
                 $wpdb->esc_like( $short ) . '%'
             ) );
         }
@@ -3492,12 +3741,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         if ( $results ) {
             foreach ( $results as $row ) {
                 $points[] = array(
-                    'id'       => $row->code,
-                    'name'     => $row->name,
-                    'address'  => $row->name,
-                    'lat'      => (float) $row->lat,
-                    'lng'      => (float) $row->lng,
-                    'schedule' => $row->schedule ?: '',
+                    'id'           => $row->code,
+                    'name'         => $row->name,
+                    'address'      => $row->name,
+                    'lat'          => (float) $row->lat,
+                    'lng'          => (float) $row->lng,
+                    'schedule'     => $row->schedule ?: '',
+                    'cash_allowed' => (int) $row->cash_allowed,
                 );
             }
         }
@@ -3688,9 +3938,18 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'yd_update' ) ) {
             wp_send_json_error( array( 'message' => 'Invalid nonce' ) );
         }
-        $code = isset( $_POST['code'] ) ? sanitize_text_field( wp_unslash( $_POST['code'] ) ) : '';
-        $address = isset( $_POST['address'] ) ? sanitize_text_field( wp_unslash( $_POST['address'] ) ) : '';
+        $code         = isset( $_POST['code'] ) ? sanitize_text_field( wp_unslash( $_POST['code'] ) ) : '';
+        $address      = isset( $_POST['address'] ) ? sanitize_text_field( wp_unslash( $_POST['address'] ) ) : '';
+        $cash_allowed = isset( $_POST['cash_allowed'] ) && $_POST['cash_allowed'] === '0' ? '0' : '1';
         if ( $code ) {
+            setcookie( 'yd_pvz_cash_allowed', $cash_allowed, array(
+                'expires'  => 0,
+                'path'     => COOKIEPATH,
+                'domain'   => COOKIE_DOMAIN,
+                'secure'   => is_ssl(),
+                'httponly'  => false,
+                'samesite' => 'Lax',
+            ) );
             setcookie( 'yd_pvz_code', $code, array(
                 'expires'  => 0,
                 'path'     => COOKIEPATH,
@@ -3800,6 +4059,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         lat decimal(10,7) DEFAULT 0,
         lng decimal(10,7) DEFAULT 0,
         schedule varchar(255) DEFAULT '',
+        cash_allowed tinyint(1) NOT NULL DEFAULT 1,
         PRIMARY KEY  (id),
         INDEX idx_city (city)
     ) $charset_collate;";
@@ -3936,17 +4196,30 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 );
             }
 
+            // Определяем поддержку наложенного платежа (card_on_receipt) из API
+            $cash_allowed = 1; // по умолчанию разрешено
+            if ( isset( $point['payment_methods'] ) && is_array( $point['payment_methods'] ) ) {
+                $cash_allowed = in_array( 'card_on_receipt', $point['payment_methods'], true ) ? 1 : 0;
+            } elseif ( isset( $point['allowed_payment_methods'] ) && is_array( $point['allowed_payment_methods'] ) ) {
+                $cash_allowed = in_array( 'card_on_receipt', $point['allowed_payment_methods'], true ) ? 1 : 0;
+            } elseif ( isset( $point['cash'] ) ) {
+                $cash_allowed = (int) (bool) $point['cash'];
+            } elseif ( isset( $point['payment_on_delivery'] ) ) {
+                $cash_allowed = (int) (bool) $point['payment_on_delivery'];
+            }
+
             $result = $wpdb->insert(
                 $table_name,
                 array(
-                    'code'     => $point['id'],
-                    'name'     => $name,
-                    'city'     => $city,
-                    'lat'      => $lat,
-                    'lng'      => $lng,
-                    'schedule' => $schedule,
+                    'code'         => $point['id'],
+                    'name'         => $name,
+                    'city'         => $city,
+                    'lat'          => $lat,
+                    'lng'          => $lng,
+                    'schedule'     => $schedule,
+                    'cash_allowed' => $cash_allowed,
                 ),
-                array( '%s', '%s', '%s', '%f', '%f', '%s' )
+                array( '%s', '%s', '%s', '%f', '%f', '%s', '%d' )
             );
             if ( $result ) {
                 $inserted++;
