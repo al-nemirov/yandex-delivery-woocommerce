@@ -1913,7 +1913,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
                         // Адрес назначения для ПВЗ: берём из cookie, если он есть.
                         if ( ! empty( $_COOKIE['yd_pvz_address'] ) ) {
-                            $pvzAddr = sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_address'] ) );
+                            $pvzAddr = sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) );
                             if ( $pvzAddr ) {
                                 $destinationAddress = $pvzAddr;
                             }
@@ -2237,7 +2237,15 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
         }
 
-        return (float) $product->get_weight();
+        $weight = (float) $product->get_weight();
+        if ( $weight <= 0 ) {
+            error_log( sprintf(
+                '[YD] Товар #%d «%s»: вес не указан и маппинг размер→вес не найден. Будет использован вес по умолчанию.',
+                $product->get_id(),
+                $product->get_name()
+            ) );
+        }
+        return $weight;
     }
 
     // bxbGetUrl() removed — dead code, never called
@@ -3445,7 +3453,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 >' . $link_with_img . $nbsp . esc_html( $link_title ) . '</a></p>';
 
                     // Показываем выбранный ПВЗ из cookie (переживает update_checkout)
-                    $pvz_address = isset( $_COOKIE['yd_pvz_address'] ) ? sanitize_text_field( wp_unslash( urldecode( $_COOKIE['yd_pvz_address'] ) ) ) : '';
+                    $pvz_address = isset( $_COOKIE['yd_pvz_address'] ) ? sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) ) : '';
                     $pvz_code    = isset( $_COOKIE['yd_pvz_code'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) : '';
                     if ( $pvz_address && $pvz_code ) {
                         echo '<div class="nd-pvz-selected" style="margin:8px 0 4px 15px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:14px;color:#166534;"><strong>ПВЗ:</strong> ' . esc_html( $pvz_address ) . '</div>';
@@ -3854,7 +3862,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             if ( strpos( $method_id, 'yd_self' ) !== false ) {
                 if ( isset( $_COOKIE['yd_pvz_code'] ) ) {
                     $order->update_meta_data( 'yd_code', sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) );
-                    $order->update_meta_data( 'yd_address', sanitize_text_field( wp_unslash( isset( $_COOKIE['yd_pvz_address'] ) ? $_COOKIE['yd_pvz_address'] : '' ) ) );
+                    $order->update_meta_data( 'yd_address', sanitize_text_field( rawurldecode( wp_unslash( isset( $_COOKIE['yd_pvz_address'] ) ? $_COOKIE['yd_pvz_address'] : '' ) ) ) );
                     $needs_save = true;
                 }
             }
@@ -3921,7 +3929,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             ] ) ) {
                 if ( isset( $_COOKIE['yd_pvz_code'], $_COOKIE['yd_pvz_address'] ) ) {
                     $order->update_meta_data( 'yd_code', sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) );
-                    $order->update_meta_data( 'yd_address', sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) );
+                    $order->update_meta_data( 'yd_address', sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) ) );
                     $order->save();
                 }
                 if ( get_current_user_id() > 0 ) {
@@ -3960,7 +3968,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             ) );
         }
         if ( $address ) {
-            setcookie( 'yd_pvz_address', $address, array(
+            // rawurlencode согласуется с encodeURIComponent в JS
+            setcookie( 'yd_pvz_address', rawurlencode( $address ), array(
                 'expires'  => 0,
                 'path'     => COOKIEPATH,
                 'domain'   => COOKIE_DOMAIN,
@@ -4516,7 +4525,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         $parts = isset( $methods[0] ) ? explode( ':', $methods[0] ) : array( '' );
         $method = $parts[0];
         if ( strpos( $method, 'yd_self' ) !== false ) {
-            $pvz_address = isset( $_COOKIE['yd_pvz_address'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) : 'ПВЗ Яндекс Доставки';
+            $pvz_address = isset( $_COOKIE['yd_pvz_address'] ) ? sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) ) : 'ПВЗ Яндекс Доставки';
             if ( empty( $data['billing_address_1'] ) ) {
                 $data['billing_address_1'] = $pvz_address;
                 $_POST['billing_address_1'] = $pvz_address;
