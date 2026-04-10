@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.15.0
+Version: 2.15.1
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -3749,33 +3749,62 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
         }
 
-        // Ищем в локальной БД по городу.
-        // Ищем в обеих колонках — city (address.locality из API) и name (полный адрес вида "Калининград, ул. ..., 12"),
-        // так как часть точек может иметь пустой/нестандартный locality, но город присутствует в полном адресе.
-        // Для метода с COD (payment_after=1) показываем только ПВЗ, принимающие наложенный платёж.
-        $like      = '%' . $wpdb->esc_like( $city ) . '%';
+        // Ищем в локальной БД СТРОГО по колонке city (там чистое имя города
+        // из address.locality, напр. "Псков", "Калининград").
+        // По name (полному адресу) искать НЕЛЬЗЯ — "Псков" поймает "Псковская улица" в Москве.
+        //
+        // Стратегия в 3 шага от строгого к мягкому:
+        //   1) city = 'Псков' (без учёта регистра)
+        //   2) city LIKE 'Псков%' — на случай "Псков город"
+        //   3) city LIKE '%Псков%' — на случай "г. Псков", "г Псков" и т.п.
+        // 3-символьный фолбэк удалён — из-за него "Калининград" находил "Калугу".
         $cod_where = $payment_after ? ' AND cash_allowed = 1' : '';
 
-        // Проверяем есть ли колонка cash_allowed (на случай если миграция не прошла)
         $cols = $wpdb->get_col( "DESCRIBE `{$table}`", 0 );
         if ( ! in_array( 'cash_allowed', $cols ) ) {
-            $cod_where = ''; // фоллбэк: не фильтруем
+            $cod_where = '';
         }
-
         $select_cash = in_array( 'cash_allowed', $cols ) ? ', cash_allowed' : ', 1 AS cash_allowed';
 
+        $city_norm       = mb_strtolower( $city );
+        $like_exact      = $wpdb->esc_like( $city );
+        $like_prefix     = $wpdb->esc_like( $city ) . '%';
+        $like_contains   = '%' . $wpdb->esc_like( $city ) . '%';
+        $base_sql        = "SELECT code, name, city, lat, lng, schedule{$select_cash}
+             FROM `{$table}`
+             WHERE %s{$cod_where}
+             ORDER BY name LIMIT 500";
+
+        // 1) Точное совпадение города (регистронезависимо)
         $results = $wpdb->get_results( $wpdb->prepare(
             "SELECT code, name, city, lat, lng, schedule{$select_cash}
              FROM `{$table}`
-             WHERE ( city LIKE %s OR name LIKE %s ){$cod_where}
+             WHERE LOWER(city) = %s{$cod_where}
              ORDER BY name LIMIT 500",
-            $like,
-            $like
+            $city_norm
         ) );
 
-        // ВАЖНО: 3-символьный фолбэк удалён — он давал ложные срабатывания
-        // (напр. «Калининград» → «Кал» → Калуга). Если по точному подстрочному
-        // совпадению ничего не нашлось, возвращаем пустой результат.
+        // 2) Префиксное совпадение ("Псков…")
+        if ( empty( $results ) ) {
+            $results = $wpdb->get_results( $wpdb->prepare(
+                "SELECT code, name, city, lat, lng, schedule{$select_cash}
+                 FROM `{$table}`
+                 WHERE city LIKE %s{$cod_where}
+                 ORDER BY name LIMIT 500",
+                $like_prefix
+            ) );
+        }
+
+        // 3) Подстрока ("г. Псков")
+        if ( empty( $results ) ) {
+            $results = $wpdb->get_results( $wpdb->prepare(
+                "SELECT code, name, city, lat, lng, schedule{$select_cash}
+                 FROM `{$table}`
+                 WHERE city LIKE %s{$cod_where}
+                 ORDER BY name LIMIT 500",
+                $like_contains
+            ) );
+        }
 
         $points = array();
         if ( $results ) {
