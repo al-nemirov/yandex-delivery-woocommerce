@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.14.0
+Version: 2.15.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -952,6 +952,18 @@ function yd_run_updates()
             error_log( '[YD] Migration v3: added cash_allowed column' );
         }
         update_option( 'yd_reception_points_v3', 1 );
+    }
+
+    // Добавить колонку payment_methods (JSON со списком способов оплаты в ПВЗ: postpay / card_on_receipt)
+    if ( yd_is_reception_points_table_exist() && ! get_option( 'yd_reception_points_v4' ) ) {
+        global $wpdb;
+        $t    = $wpdb->prefix . 'yd_reception_points';
+        $cols = $wpdb->get_col( "DESCRIBE `{$t}`", 0 );
+        if ( ! in_array( 'payment_methods', $cols ) ) {
+            $wpdb->query( "ALTER TABLE `{$t}` ADD COLUMN payment_methods VARCHAR(128) NOT NULL DEFAULT ''" );
+            error_log( '[YD] Migration v4: added payment_methods column' );
+        }
+        update_option( 'yd_reception_points_v4', 1 );
     }
 
     if (!yd_is_reception_points_table_exist()) {
@@ -3059,7 +3071,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $numSeg     = count( $segments );
             $items_list = array();
 
-            $weightC = yd_unit_coefficients()['weight_c'];
+            $unitCoeff = yd_unit_coefficients();
+            $weightC   = $unitCoeff['weight_c'];
+            $dimC      = $unitCoeff['dimension_c'];
 
             foreach ( $segments as $segIndex => $seg ) {
                 $barcode = ( 1 === $numSeg ) ? 'WC' . $orderIdInt : 'WC' . $orderIdInt . '-' . ( $segIndex + 1 );
@@ -3077,18 +3091,33 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     $unitPriceRub     = (int) round( $lineTotalRub );
                     $unitPriceKopecks = $unitPriceRub * 100;
 
-                    // Вес единицы товара в граммах для ЯД (items[].weight на этикетке)
+                    // Вес единицы товара в граммах для ЯД
                     $varId       = isset( $entry['variation_id'] ) ? (int) $entry['variation_id'] : 0;
                     $rawWeightG  = (float) bxbGetWeight( $product, $varId ) * $weightC;
                     $itemWeightG = $rawWeightG > 0 ? (int) ceil( $rawWeightG ) : (int) ceil( $defaultWeight );
+
+                    // Габариты единицы товара в см для ЯД (items[].physical_dims)
+                    $itemDx = (int) round( (float) $product->get_length() * $dimC );
+                    $itemDy = (int) round( (float) $product->get_width()  * $dimC );
+                    $itemDz = (int) round( (float) $product->get_height() * $dimC );
+                    if ( 1 === $applyDefaultDimensions ) {
+                        if ( $itemDx <= 0 ) { $itemDx = (int) $defaultDepth; }
+                        if ( $itemDy <= 0 ) { $itemDy = (int) $defaultWidth; }
+                        if ( $itemDz <= 0 ) { $itemDz = (int) $defaultHeight; }
+                    }
 
                     $items_list[] = array(
                         'article'         => $id,
                         'name'            => $oi->get_name(),
                         'price'           => $unitPriceRub,
                         'count'           => (int) $entry['quantity'],
-                        'weight'          => $itemWeightG,
                         'place_barcode'   => $barcode,
+                        'physical_dims'   => array(
+                            'weight_gross' => $itemWeightG,
+                            'dx'           => $itemDx,
+                            'dy'           => $itemDy,
+                            'dz'           => $itemDz,
+                        ),
                         'billing_details' => array(
                             'unit_price'          => $unitPriceKopecks,
                             'assessed_unit_price' => $unitPriceKopecks,
@@ -3720,8 +3749,10 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             }
         }
 
-        // Ищем в локальной БД по городу (LIKE — "Мытищ" найдёт "Мытищи")
-        // Для метода с COD (payment_after=1) показываем только ПВЗ, принимающие наложенный платёж
+        // Ищем в локальной БД по городу.
+        // Ищем в обеих колонках — city (address.locality из API) и name (полный адрес вида "Калининград, ул. ..., 12"),
+        // так как часть точек может иметь пустой/нестандартный locality, но город присутствует в полном адресе.
+        // Для метода с COD (payment_after=1) показываем только ПВЗ, принимающие наложенный платёж.
         $like      = '%' . $wpdb->esc_like( $city ) . '%';
         $cod_where = $payment_after ? ' AND cash_allowed = 1' : '';
 
@@ -3731,19 +3762,20 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $cod_where = ''; // фоллбэк: не фильтруем
         }
 
+        $select_cash = in_array( 'cash_allowed', $cols ) ? ', cash_allowed' : ', 1 AS cash_allowed';
+
         $results = $wpdb->get_results( $wpdb->prepare(
-            "SELECT code, name, city, lat, lng, schedule" . ( in_array( 'cash_allowed', $cols ) ? ', cash_allowed' : ', 1 AS cash_allowed' ) . " FROM `{$table}` WHERE city LIKE %s{$cod_where} ORDER BY name LIMIT 500",
+            "SELECT code, name, city, lat, lng, schedule{$select_cash}
+             FROM `{$table}`
+             WHERE ( city LIKE %s OR name LIKE %s ){$cod_where}
+             ORDER BY name LIMIT 500",
+            $like,
             $like
         ) );
 
-        if ( empty( $results ) ) {
-            // Второй вариант — первые 3 символа
-            $short = mb_substr( $city, 0, 3 );
-            $results = $wpdb->get_results( $wpdb->prepare(
-                "SELECT code, name, city, lat, lng, schedule" . ( in_array( 'cash_allowed', $cols ) ? ', cash_allowed' : ', 1 AS cash_allowed' ) . " FROM `{$table}` WHERE city LIKE %s{$cod_where} ORDER BY name LIMIT 500",
-                $wpdb->esc_like( $short ) . '%'
-            ) );
-        }
+        // ВАЖНО: 3-символьный фолбэк удалён — он давал ложные срабатывания
+        // (напр. «Калининград» → «Кал» → Калуга). Если по точному подстрочному
+        // совпадению ничего не нашлось, возвращаем пустой результат.
 
         $points = array();
         if ( $results ) {
@@ -4132,7 +4164,10 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             error_log('[YD] add_reception_points: table created');
         }
 
-        // Загружаем точки самопривоза из Yandex Delivery API
+        // Загружаем ПВЗ из Yandex Delivery API.
+        // type=pickup_point → все обычные ПВЗ для самовывоза покупателем (~30k по РФ).
+        // НЕ используем available_for_dropoff=true — это подмножество «куда магазин везёт посылки»,
+        // в нём отсутствуют целые города (Псков, Калининград и т.п.), хотя Яндекс туда доставляет.
         $response = wp_remote_post(
             'https://b2b-authproxy.taxi.yandex.net/api/b2b/platform/pickup-points/list',
             array(
@@ -4142,7 +4177,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'Content-Type'   => 'application/json',
                     'Accept-Language' => 'ru',
                 ),
-                'body' => wp_json_encode( array( 'available_for_dropoff' => true ) ),
+                'body' => wp_json_encode( array( 'type' => 'pickup_point' ) ),
             )
         );
 
@@ -4175,6 +4210,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         $table_name = $wpdb->prefix . 'yd_reception_points';
         $wpdb->query("TRUNCATE TABLE `{$table_name}`");
 
+        // Проверяем наличие новых колонок (на случай если миграция не прошла)
+        $cols_rp = $wpdb->get_col( "DESCRIBE `{$table_name}`", 0 );
+
         $inserted = 0;
         foreach ( $points as $point ) {
             if ( empty( $point['id'] ) ) {
@@ -4205,31 +4243,69 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 );
             }
 
-            // Определяем поддержку наложенного платежа (card_on_receipt) из API
-            $cash_allowed = 1; // по умолчанию разрешено
-            if ( isset( $point['payment_methods'] ) && is_array( $point['payment_methods'] ) ) {
-                $cash_allowed = in_array( 'card_on_receipt', $point['payment_methods'], true ) ? 1 : 0;
-            } elseif ( isset( $point['allowed_payment_methods'] ) && is_array( $point['allowed_payment_methods'] ) ) {
-                $cash_allowed = in_array( 'card_on_receipt', $point['allowed_payment_methods'], true ) ? 1 : 0;
+            // Определяем способы оплаты в ПВЗ из API pickup-points/list.
+            // Яндекс может вернуть поле под разными именами и в разном формате:
+            //   - payment_methods: ['postpay','card_on_receipt']
+            //   - payment_method : 'card_on_receipt'
+            //   - allowed_payment_methods: [{type:'postpay'}, {type:'card_on_receipt'}]
+            // Нормализуем в простой массив строк.
+            $pm_raw = null;
+            foreach ( array( 'payment_methods', 'payment_method', 'allowed_payment_methods' ) as $k ) {
+                if ( isset( $point[ $k ] ) && $point[ $k ] !== '' ) {
+                    $pm_raw = $point[ $k ];
+                    break;
+                }
+            }
+            $pm_list = array();
+            if ( is_string( $pm_raw ) ) {
+                $pm_list[] = $pm_raw;
+            } elseif ( is_array( $pm_raw ) ) {
+                foreach ( $pm_raw as $pm_item ) {
+                    if ( is_string( $pm_item ) ) {
+                        $pm_list[] = $pm_item;
+                    } elseif ( is_array( $pm_item ) ) {
+                        if ( isset( $pm_item['type'] ) ) {
+                            $pm_list[] = (string) $pm_item['type'];
+                        } elseif ( isset( $pm_item['name'] ) ) {
+                            $pm_list[] = (string) $pm_item['name'];
+                        }
+                    }
+                }
+            }
+            $pm_list = array_values( array_unique( array_filter( array_map( 'strval', $pm_list ) ) ) );
+
+            // cash_allowed = 1, если ПВЗ принимает card_on_receipt (физическая оплата в терминале).
+            // Если API вообще не вернул payment_methods — считаем 1 (не скрываем точки),
+            // но запасные поля cash/payment_on_delivery уважаем.
+            if ( ! empty( $pm_list ) ) {
+                $cash_allowed = in_array( 'card_on_receipt', $pm_list, true ) ? 1 : 0;
             } elseif ( isset( $point['cash'] ) ) {
                 $cash_allowed = (int) (bool) $point['cash'];
             } elseif ( isset( $point['payment_on_delivery'] ) ) {
                 $cash_allowed = (int) (bool) $point['payment_on_delivery'];
+            } else {
+                $cash_allowed = 1;
             }
 
-            $result = $wpdb->insert(
-                $table_name,
-                array(
-                    'code'         => $point['id'],
-                    'name'         => $name,
-                    'city'         => $city,
-                    'lat'          => $lat,
-                    'lng'          => $lng,
-                    'schedule'     => $schedule,
-                    'cash_allowed' => $cash_allowed,
-                ),
-                array( '%s', '%s', '%s', '%f', '%f', '%s', '%d' )
+            $pm_joined = implode( ',', $pm_list );
+
+            $has_pm_col = in_array( 'payment_methods', $cols_rp, true );
+            $row_data   = array(
+                'code'         => $point['id'],
+                'name'         => $name,
+                'city'         => $city,
+                'lat'          => $lat,
+                'lng'          => $lng,
+                'schedule'     => $schedule,
+                'cash_allowed' => $cash_allowed,
             );
+            $row_fmt = array( '%s', '%s', '%s', '%f', '%f', '%s', '%d' );
+            if ( $has_pm_col ) {
+                $row_data['payment_methods'] = $pm_joined;
+                $row_fmt[]                   = '%s';
+            }
+
+            $result = $wpdb->insert( $table_name, $row_data, $row_fmt );
             if ( $result ) {
                 $inserted++;
             }
