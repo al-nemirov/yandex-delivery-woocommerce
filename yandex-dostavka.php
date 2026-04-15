@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.15.1
+Version: 2.15.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -638,11 +638,14 @@ function yd_order_recipient_names_for_yandex( WC_Order $order ) {
         }
     }
 
+    // Если фамилия пустая — лучше продублировать имя, чем печатать «—» на этикетке/акте.
     if ( $ln === '' ) {
-        $ln = (string) apply_filters( 'yd_recipient_last_name_fallback', '—', $order, $fn );
+        $default_ln = $fn !== '' ? $fn : '.';
+        $ln = (string) apply_filters( 'yd_recipient_last_name_fallback', $default_ln, $order, $fn );
     }
     if ( $fn === '' ) {
-        $fn = (string) apply_filters( 'yd_recipient_first_name_fallback', '—', $order, $ln );
+        $default_fn = $ln !== '' ? $ln : '.';
+        $fn = (string) apply_filters( 'yd_recipient_first_name_fallback', $default_fn, $order, $ln );
     }
 
     return apply_filters(
@@ -1158,6 +1161,13 @@ function yd_sync_order_statuses() {
             continue;
         }
 
+        // Не дёргаем API для заказов, которые уже в терминальном статусе на стороне ЯД
+        // (CANCELLED, SHOP_CANCELLED, DELIVERED, RETURNED…). Экономит лимит и не флудит лог.
+        $lastCode = (string) $order->get_meta( 'yd_last_status_code' );
+        if ( yd_is_terminal_status_code( $lastCode ) ) {
+            continue;
+        }
+
         $shippingData = bxbGetShippingData( $order );
         if ( ! isset( $shippingData['object'] ) ) {
             continue;
@@ -1349,6 +1359,30 @@ function yd_is_debug( $order_id ) {
         return false;
     }
     return $shippingData['object']->get_option( 'debug_mode' ) === '1';
+}
+
+/**
+ * Терминальные коды статусов Яндекс.Доставки — заказ закрыт, тянуть get_request_info больше не нужно.
+ *
+ * @param string $statusCode  Значение из state.status (yd_last_status_code)
+ * @return bool
+ */
+function yd_is_terminal_status_code( $statusCode ) {
+    if ( ! is_string( $statusCode ) || $statusCode === '' ) {
+        return false;
+    }
+    $terminal = apply_filters( 'yd_terminal_status_codes', array(
+        'DELIVERED',
+        'DELIVERED_FINISH',
+        'CANCELLED',
+        'SHOP_CANCELLED',
+        'RETURNED',
+        'RETURNED_FINISH',
+        'RETURNED_TO_SHOP',
+        'RETURNED_DELIVERED',
+        'FAILED',
+    ) );
+    return in_array( strtoupper( $statusCode ), $terminal, true );
 }
 
 /**

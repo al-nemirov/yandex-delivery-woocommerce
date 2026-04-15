@@ -231,6 +231,19 @@ class Yandex_Delivery_API {
             'places'               => $places_body,
         );
 
+        // Кросс-запросный кэш через transient (30 сек) — чтобы дубликаты от
+        // параллельных AJAX checkout-а не дёргали API дважды подряд.
+        $cache_key = 'yd_pcalc_' . md5( wp_json_encode( $body ) );
+        if ( function_exists( 'get_transient' ) ) {
+            $cached = get_transient( $cache_key );
+            if ( $cached !== false ) {
+                if ( function_exists( 'yd_log' ) ) {
+                    yd_log( 'API SKIP /api/b2b/platform/pricing-calculator (cache hit ' . $cache_key . ')' );
+                }
+                return $cached;
+            }
+        }
+
         // Log request/response only when WP_DEBUG is on; mask addresses to protect PII in prod
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             $logBody = $body;
@@ -244,6 +257,11 @@ class Yandex_Delivery_API {
         }
 
         $result = $this->post( '/api/b2b/platform/pricing-calculator', $body );
+
+        // Кэшируем только успешные ответы, чтобы не залипать на ошибке API.
+        if ( ! is_wp_error( $result ) && function_exists( 'set_transient' ) ) {
+            set_transient( $cache_key, $result, 30 );
+        }
 
         if ( ! is_wp_error( $result ) && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( '[YD API] pricing-calculator RESPONSE: ' . wp_json_encode( $result ) );
@@ -284,13 +302,71 @@ class Yandex_Delivery_API {
      * @param array $request_data
      * @return array|WP_Error
      */
+    /**
+     * Создать заказ на доставку.
+     * ИСПРАВЛЕНО: добавлен фикс weight: 0 в items
+     *
+     * @param array $request_data
+     * @return array|WP_Error
+     */
     public function create_request( $request_data ) {
+        if ( ! is_array( $request_data ) ) {
+            return $this->post( '/api/b2b/platform/request/create', $request_data );
+        }
+
+        // Округление денежных полей (оставляем как было)
         if ( function_exists( 'yd_request_data_round_money_for_api' ) && is_array( $request_data ) ) {
             $request_data = yd_request_data_round_money_for_api( $request_data );
         }
+
+        // === ФИКС ВЕСА ТОВАРОВ ===
+        if ( isset( $request_data['items'] ) && is_array( $request_data['items'] ) && ! empty( $request_data['items'] ) ) {
+            $request_data['items'] = $this->fix_items_weight( $request_data['items'] );
+        }
+
         return $this->post( '/api/b2b/platform/request/create', $request_data );
     }
 
+    /**
+     * Исправляет вес в каждом товаре (решает проблему weight: 0)
+     */
+    private function fix_items_weight( $items ) {
+        if ( empty( $items ) || ! function_exists( 'bxbGetWeight' ) || ! function_exists( 'yd_unit_coefficients' ) ) {
+            return $items;
+        }
+
+        $coeff   = yd_unit_coefficients();
+        $weightC = $coeff['weight_c'];   // 1000 если кг, 1 если граммы
+
+        foreach ( $items as $idx => &$item ) {
+            if ( empty( $item['article'] ) ) {
+                continue;
+            }
+
+            $product = null;
+            $prod_id = wc_get_product_id_by_sku( $item['article'] );
+            if ( $prod_id ) {
+                $product = wc_get_product( $prod_id );
+            }
+
+            if ( ! $product ) {
+                continue;
+            }
+
+            $raw_weight = bxbGetWeight( $product );
+            $grams      = ( $raw_weight > 0 ) 
+                        ? (int) ceil( (float) $raw_weight * $weightC ) 
+                        : 500;   // дефолт 500 грамм
+
+            $item['weight'] = $grams;
+
+            if ( function_exists( 'yd_log' ) ) {
+                yd_log( "YD Weight Fix → SKU: {$item['article']} | weight: {$grams} g" );
+            }
+        }
+
+        return $items;
+    }
     /**
      * Подтвердить заказ.
      *
