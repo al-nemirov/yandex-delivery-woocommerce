@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.15.4
+Version: 2.16.0-beta
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -933,8 +933,7 @@ function yd_run_updates()
         }
         update_option( 'yd_reception_points_v2', 1 );
         // Принудительно перезагрузить данные с координатами
-        $methods = array( 'yd_self', 'yd_self_after', 'yd_courier', 'yd_courier_after' );
-        foreach ( $methods as $mid ) {
+        foreach ( yd_all_method_ids() as $mid ) {
             $s = get_option( 'woocommerce_' . $mid . '_settings' );
             if ( is_array( $s ) && ! empty( $s['key'] ) ) {
                 yd_add_reception_points( $s['key'] );
@@ -981,6 +980,43 @@ function yd_run_updates()
         error_log('yd_update_data_event активирован');
         wp_schedule_event(time(), 'twicedaily', 'yd_update_data_event');
     }
+}
+
+/**
+ * Единый список всех базовых ID методов доставки Яндекса (без суффикса :instance_id).
+ * Используется для: поиска токена в настройках, группировки методов в UI,
+ * миграций, фильтров. BETA методы тоже сюда включены, чтобы одного токена хватало.
+ *
+ * Фильтруется через 'yd_all_method_ids' — кастомный subclass можно зарегистрировать
+ * извне и автоматически получить справочник ПВЗ, статусы, акты и т.п.
+ *
+ * @return string[]
+ */
+function yd_all_method_ids() {
+    static $cached = null;
+    if ( $cached !== null ) {
+        return $cached;
+    }
+    $cached = (array) apply_filters( 'yd_all_method_ids', array(
+        'yd_self',
+        'yd_self_after',
+        'yd_courier',
+        'yd_courier_after',
+        'yd_express',   // BETA
+        'yd_same_day',  // BETA
+    ) );
+    return $cached;
+}
+
+/**
+ * Только ПВЗ-методы (самовывоз покупателем). Курьерские тарифы сюда НЕ входят.
+ * Используется для ветвлений типа «скрыть наличные для ПВЗ без COD», «показать
+ * кнопку выбора ПВЗ», маппинга адреса доставки в код ПВЗ и т.д.
+ *
+ * @return string[]
+ */
+function yd_pvz_method_ids() {
+    return (array) apply_filters( 'yd_pvz_method_ids', array( 'yd_self', 'yd_self_after' ) );
 }
 
 register_activation_hook(__FILE__, 'yd_add_update_data_event');
@@ -1495,6 +1531,12 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             public $widget_url;
             public $ps_on_status;
             public $default_weight;
+            /**
+             * Явный код тарифа для pricing-calculator ('self_pickup' | 'time_interval' | 'express' | 'same_day').
+             * Если null — используется старая логика: self_type ? 'self_pickup' : 'time_interval'.
+             * Задаётся в конструкторе дочернего класса.
+             */
+            public $tariff = null;
 
             public function __construct( $instance_id = 0 )
             {
@@ -2047,8 +2089,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         $destinationAddress .= ', ' . $package['destination']['postcode'];
                     }
 
-                    // Тариф: self_pickup для ПВЗ, time_interval для курьера
-                    $tariff = $this->self_type ? 'self_pickup' : 'time_interval';
+                    // Тариф: self_pickup для ПВЗ, time_interval для курьера (по умолчанию).
+                    // Дочерний класс может явно задать $this->tariff = 'express' | 'same_day' и т.п.
+                    $tariff = $this->tariff ?: ( $this->self_type ? 'self_pickup' : 'time_interval' );
 
                     // P0 Fix: единая формула оценочной стоимости (копейки)
                     $qualifiedCartItems = array();
@@ -2203,6 +2246,39 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $this->key = $this->get_option( 'key' );
             }
         }
+
+        // ─── BETA: Экспресс-курьер (доставка за 1-2 часа) ────────────────────────
+        // Тариф Яндекса: 'express'. В ЛК Яндекс.Доставки должна быть включена подписка
+        // «Экспресс-доставка» — иначе pricing-calculator вернёт ошибку / fallback.
+        class WC_YD_Express_Method extends WC_YD_Parent_Method {
+            public function __construct( $instance_id = 0 )
+            {
+                $this->id                   = 'yd_express';
+                $this->method_title         = 'Яндекс Доставка — Экспресс (BETA)';
+                $this->instance_form_fields = array();
+                $this->self_type            = false;
+                $this->payment_after        = false;
+                $this->tariff               = 'express';
+                parent::__construct( $instance_id );
+                $this->key = $this->get_option( 'key' );
+            }
+        }
+
+        // ─── BETA: Доставка в день заказа (same-day) ────────────────────────────
+        // Тариф Яндекса: 'same_day'. Аналогично — требует подключения в ЛК.
+        class WC_YD_SameDay_Method extends WC_YD_Parent_Method {
+            public function __construct( $instance_id = 0 )
+            {
+                $this->id                   = 'yd_same_day';
+                $this->method_title         = 'Яндекс Доставка — В день заказа (BETA)';
+                $this->instance_form_fields = array();
+                $this->self_type            = false;
+                $this->payment_after        = false;
+                $this->tariff               = 'same_day';
+                parent::__construct( $instance_id );
+                $this->key = $this->get_option( 'key' );
+            }
+        }
     }
 
     /**
@@ -2311,7 +2387,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
         $cached = array( 'size_attr' => '', 'weight_map' => array() );
 
-        $yd_method_ids = array( 'yd_self', 'yd_self_after', 'yd_courier', 'yd_courier_after' );
+        $yd_method_ids = yd_all_method_ids();
 
         $zones = WC_Shipping_Zones::get_zones();
         $zones[] = array( 'zone_id' => 0 ); // Зона «Остальные»
@@ -2379,6 +2455,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         $methods['yd_courier']       = 'WC_YD_Courier_Method';
         $methods['yd_self_after']    = 'WC_YD_SelfAfter_Method';
         $methods['yd_courier_after'] = 'WC_YD_CourierAfter_Method';
+        // BETA — должны быть подключены в ЛК Яндекс.Доставки.
+        $methods['yd_express']       = 'WC_YD_Express_Method';
+        $methods['yd_same_day']      = 'WC_YD_SameDay_Method';
 
         return $methods;
     }
@@ -2409,7 +2488,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         if ( function_exists( 'WC' ) && WC()->session ) {
             $chosen = (array) WC()->session->get( 'chosen_shipping_methods', array() );
         }
-        $pvz_methods = array( 'yd_self', 'yd_self_after' );
+        $pvz_methods = yd_pvz_method_ids();
         $is_yd_pvz   = false;
         foreach ( $chosen as $method_id ) {
             $base = explode( ':', $method_id )[0];
@@ -3848,8 +3927,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         // Проверяем есть ли координаты. Если все = 0, перезагружаем.
         $has_coords = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}` WHERE lat != 0 AND lng != 0 LIMIT 1" );
         if ( ! $has_coords ) {
-            $methods = array( 'yd_self', 'yd_self_after', 'yd_courier', 'yd_courier_after' );
-            foreach ( $methods as $mid ) {
+            foreach ( yd_all_method_ids() as $mid ) {
                 $s = get_option( 'woocommerce_' . $mid . '_settings' );
                 if ( is_array( $s ) && ! empty( $s['key'] ) ) {
                     yd_add_reception_points( $s['key'] );
@@ -4110,12 +4188,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $shipping_method_parts = explode( ':', $shipping_method );
             $shipping_method_name  = $shipping_method_parts[0];
 
-            if ( in_array( $shipping_method_name, [
-                'yd_self_after',
-                'yd_self',
-                'yd_courier_after',
-                'yd_courier'
-            ] ) ) {
+            if ( in_array( $shipping_method_name, yd_all_method_ids(), true ) ) {
                 if ( isset( $_COOKIE['yd_pvz_code'], $_COOKIE['yd_pvz_address'] ) ) {
                     $order->update_meta_data( 'yd_code', sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) );
                     $order->update_meta_data( 'yd_address', sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) ) );
@@ -4577,8 +4650,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $api_key = isset( $_POST['api_key'] ) ? sanitize_text_field( wp_unslash( $_POST['api_key'] ) ) : '';
             if ( empty( $api_key ) ) {
                 // Ищем ключ в сохранённых настройках WooCommerce
-                $method_ids = array( 'yd_self', 'yd_self_after', 'yd_courier', 'yd_courier_after' );
-                foreach ( $method_ids as $mid ) {
+                foreach ( yd_all_method_ids() as $mid ) {
                     $saved_key = get_option( 'woocommerce_' . $mid . '_settings' );
                     if ( is_array( $saved_key ) && ! empty( $saved_key['key'] ) ) {
                         $api_key = $saved_key['key'];
