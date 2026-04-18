@@ -1,7 +1,7 @@
 === Яндекс Доставка для WooCommerce ===
 Contributors: al-nemirov
 Tags: доставка, woocommerce, яндекс, shipping, delivery, pvz, курьер
-Stable tag: 2.16.1-beta
+Stable tag: 2.16.2-beta
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
@@ -151,6 +151,18 @@ WooCommerce → МойСклад Яндекс — введите логин/па
 Плагин проверяет GitHub Releases каждые 12 часов. Если есть новый тег (например v2.3.0), WordPress покажет обновление в стандартном интерфейсе. Для публикации: `gh release create v2.3.0 --title "v2.3.0" --notes "описание"`.
 
 == Changelog ==
+
+= 2.16.2-beta =
+
+*Changelog теперь читается из readme.txt:*
+
+Раньше в WP-админке на экране «Детали обновления» (модалка после клика по «Посмотреть детали версии») отображалось тело GitHub Release — но GitHub автогенерирует его как пустышку вида `Full Changelog: compare/v2.13.0...v2.16.1-beta`. Поэтому даже после обновления плагина пользователь не видел, что именно изменилось.
+
+Решение: `yd_github_plugin_info()` теперь подтягивает секцию `== Changelog ==` из `readme.txt` на GitHub **по конкретному тегу** (`raw.githubusercontent.com/…/<tag>/readme.txt`), парсит её в HTML и отдаёт в `plugins_api → sections.changelog`. Фолбэк на ветку `main`, если тег недоступен. Если и она недоступна — фолбэк на старое поведение (body релиза).
+
+Мини-парсер WordPress.org readme-формата встроен в плагин — без зависимостей. Поддерживает: `= версия =`, `*курсив*`, `**жирный**`, `` `код` ``, маркированные и нумерованные списки. Кэш через transient `yd_github_readme_changelog` на 6 часов; сбрасывается по `?force-check=1` вместе с `yd_github_release`.
+
+Эффект: теперь достаточно обновлять readme.txt в репо (одним местом), и все клиенты при следующем апдейте сразу увидят подробный changelog в WP-админке.
 
 = 2.16.1-beta =
 

@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.16.1-beta
+Version: 2.16.2-beta
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -27,6 +27,7 @@ add_filter( 'upgrader_post_install', 'yd_github_post_install', 10, 3 );
 // Clear cache when WP force-checks ("Check again" on Updates page)
 if ( is_admin() && isset( $_GET['force-check'] ) ) {
     delete_transient( 'yd_github_release' );
+    delete_transient( 'yd_github_readme_changelog' );
 }
 
 /**
@@ -138,6 +139,179 @@ function yd_github_check_update( $transient ) {
     return $transient;
 }
 
+/**
+ * Загружает и парсит секцию == Changelog == из readme.txt на GitHub для заданного тега.
+ *
+ * Зачем: у нас исторически длинный changelog в readme.txt, а body GitHub-релиза часто
+ * автогенерируется как "Full Changelog: compare/v..." — пустышка. WordPress в модалке
+ * «Детали обновления» показывает то, что вернёт plugins_api → sections.changelog.
+ * Берём полноценный changelog из readme.txt в корне репо по конкретному тегу —
+ * он всегда актуален и пишется одним местом (при каждом релизе).
+ *
+ * @param string $tag_name Например 'v2.16.1-beta' или '2.16.1-beta'
+ * @param int    $max_versions Сколько последних версий показывать (0 = все)
+ * @return string HTML-готовый changelog или пустая строка при ошибке
+ */
+function yd_github_fetch_readme_changelog( $tag_name, $max_versions = 5 ) {
+    $cache_key = 'yd_github_readme_changelog';
+    $cached    = get_transient( $cache_key );
+    if ( is_array( $cached ) && isset( $cached['tag'] ) && $cached['tag'] === $tag_name ) {
+        return (string) $cached['html'];
+    }
+
+    // raw.githubusercontent.com отдаёт файлы из репо по тегу/ветке быстрее и без лимитов API.
+    $tag = $tag_name;
+    $raw_url = sprintf(
+        'https://raw.githubusercontent.com/al-nemirov/yandex-delivery-woocommerce/%s/readme.txt',
+        rawurlencode( $tag )
+    );
+
+    $response = wp_remote_get( $raw_url, array(
+        'timeout' => 10,
+        'headers' => array(
+            'User-Agent' => 'YandexDostavka-WordPress-Updater/1.0',
+        ),
+    ) );
+
+    if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
+        // Фолбэк — ветка main (если тег недоступен по какой-то причине).
+        $raw_url  = 'https://raw.githubusercontent.com/al-nemirov/yandex-delivery-woocommerce/main/readme.txt';
+        $response = wp_remote_get( $raw_url, array( 'timeout' => 10, 'headers' => array( 'User-Agent' => 'YandexDostavka-WordPress-Updater/1.0' ) ) );
+        if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
+            return '';
+        }
+    }
+
+    $body = wp_remote_retrieve_body( $response );
+    if ( ! is_string( $body ) || $body === '' ) {
+        return '';
+    }
+
+    $html = yd_parse_readme_changelog_to_html( $body, $max_versions );
+    set_transient( $cache_key, array( 'tag' => $tag_name, 'html' => $html ), 6 * HOUR_IN_SECONDS );
+    return $html;
+}
+
+/**
+ * Парсер секции == Changelog == формата WordPress.org readme.txt → HTML.
+ *
+ * Поддерживает:
+ *   = 2.16.1-beta =     → <h4>2.16.1-beta</h4>
+ *   *жирный*            → <strong>
+ *   `код`               → <code>
+ *   **строго жирный**   → <strong>
+ *   * пункт             → <li>
+ *   1. пункт            → <li> внутри <ol>
+ *   пустая строка       → разделитель
+ *
+ * Не используем полноценный markdown (не тянем зависимости), нам хватает подмножества.
+ *
+ * @param string $readme_body Сырое содержимое readme.txt
+ * @param int    $max_versions Ограничение на число секций (0 = без лимита)
+ * @return string
+ */
+function yd_parse_readme_changelog_to_html( $readme_body, $max_versions = 5 ) {
+    // Вырезаем секцию Changelog от == Changelog == до конца файла или след. ==...==
+    if ( ! preg_match( '/==\s*Changelog\s*==\s*(.+)$/is', $readme_body, $m ) ) {
+        return '';
+    }
+    $chunk = $m[1];
+    // Обрезаем на следующей секции верхнего уровня (== ... ==) — хотя changelog обычно последний.
+    if ( preg_match( '/^(.+?)^==\s*[^=]+?\s*==/sm', $chunk, $m2 ) ) {
+        $chunk = $m2[1];
+    }
+
+    // Разбиваем на блоки по маркеру = X.Y.Z =
+    $parts = preg_split( '/^=\s*([^=\n]+?)\s*=\s*$/m', $chunk, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY );
+    if ( ! is_array( $parts ) || count( $parts ) < 2 ) {
+        return '<pre>' . esc_html( trim( $chunk ) ) . '</pre>';
+    }
+
+    $html   = '';
+    $shown  = 0;
+    // Первый элемент — текст до первой версии (игнорируем), далее [version, body, version, body, …].
+    $offset = ( count( $parts ) % 2 === 1 ) ? 1 : 0;
+    for ( $i = $offset; $i < count( $parts ); $i += 2 ) {
+        if ( $max_versions > 0 && $shown >= $max_versions ) { break; }
+        $ver  = isset( $parts[ $i ] ) ? trim( $parts[ $i ] ) : '';
+        $body = isset( $parts[ $i + 1 ] ) ? trim( $parts[ $i + 1 ] ) : '';
+        if ( $ver === '' ) { continue; }
+
+        $html .= '<h4 style="margin:16px 0 6px;">' . esc_html( $ver ) . '</h4>';
+        $html .= yd_readme_body_to_html( $body );
+        $shown++;
+    }
+
+    return $html ?: '<pre>' . esc_html( trim( $chunk ) ) . '</pre>';
+}
+
+/**
+ * Конвертирует тело одной changelog-секции (между = X.Y.Z =) в HTML.
+ * Поддерживает **жирный**, *курсив*, `код`, пункты со звёздочкой и нумерованные.
+ */
+function yd_readme_body_to_html( $body ) {
+    $lines = preg_split( "/\r?\n/", $body );
+    $html  = '';
+    $in_ul = false;
+    $in_ol = false;
+    $para  = array();
+
+    $flush_para = function () use ( &$para, &$html ) {
+        if ( ! empty( $para ) ) {
+            $text = implode( ' ', $para );
+            $html .= '<p>' . yd_readme_inline( $text ) . '</p>';
+            $para = array();
+        }
+    };
+    $close_lists = function () use ( &$in_ul, &$in_ol, &$html ) {
+        if ( $in_ul ) { $html .= '</ul>'; $in_ul = false; }
+        if ( $in_ol ) { $html .= '</ol>'; $in_ol = false; }
+    };
+
+    foreach ( $lines as $raw ) {
+        $line = rtrim( $raw );
+        if ( $line === '' ) {
+            $flush_para();
+            $close_lists();
+            continue;
+        }
+        // "* пункт" (или "- пункт")
+        if ( preg_match( '/^\s*[\*\-]\s+(.*)$/u', $line, $mm ) ) {
+            $flush_para();
+            if ( $in_ol ) { $html .= '</ol>'; $in_ol = false; }
+            if ( ! $in_ul ) { $html .= '<ul>'; $in_ul = true; }
+            $html .= '<li>' . yd_readme_inline( $mm[1] ) . '</li>';
+            continue;
+        }
+        // "1. пункт"
+        if ( preg_match( '/^\s*\d+\.\s+(.*)$/u', $line, $mm ) ) {
+            $flush_para();
+            if ( $in_ul ) { $html .= '</ul>'; $in_ul = false; }
+            if ( ! $in_ol ) { $html .= '<ol>'; $in_ol = true; }
+            $html .= '<li>' . yd_readme_inline( $mm[1] ) . '</li>';
+            continue;
+        }
+        // Обычная строка — копим в параграф.
+        $close_lists();
+        $para[] = ltrim( $line );
+    }
+    $flush_para();
+    $close_lists();
+    return $html;
+}
+
+/**
+ * Инлайн-разметка: **bold**, *italic*, `code`. Остальной текст экранируется.
+ */
+function yd_readme_inline( $text ) {
+    $text = esc_html( $text );
+    $text = preg_replace( '/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $text );
+    // *курсив* — после ** чтобы не съесть звёздочки.
+    $text = preg_replace( '/(^|[^\*])\*([^\*\n]+?)\*(?!\*)/u', '$1<em>$2</em>', $text );
+    $text = preg_replace( '/`([^`]+?)`/u', '<code>$1</code>', $text );
+    return $text;
+}
+
 function yd_github_plugin_info( $result, $action, $args ) {
     if ( $action !== 'plugin_information' ) {
         return $result;
@@ -164,6 +338,14 @@ function yd_github_plugin_info( $result, $action, $args ) {
         }
     }
 
+    // Changelog берём из readme.txt на GitHub (секция == Changelog ==) — там
+    // подробный список за всю историю. Body релиза обычно пустышка вида
+    // "Full Changelog: compare/...". Если readme.txt недоступен — фолбэк на body.
+    $changelog_html = yd_github_fetch_readme_changelog( $release['tag_name'], 5 );
+    if ( $changelog_html === '' ) {
+        $changelog_html = nl2br( esc_html( $release['body'] ?? '' ) );
+    }
+
     return (object) array(
         'name'          => $plugin_data['Name'],
         'slug'          => 'yandex-dostavka',
@@ -173,7 +355,7 @@ function yd_github_plugin_info( $result, $action, $args ) {
         'download_link' => $download_url,
         'sections'      => array(
             'description' => $plugin_data['Description'],
-            'changelog'   => nl2br( esc_html( $release['body'] ?? '' ) ),
+            'changelog'   => $changelog_html,
         ),
         'requires'      => '5.0',
         'requires_php'  => '7.2',
