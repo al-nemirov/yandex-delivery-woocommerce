@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.15.3
+Version: 2.15.4
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1002,6 +1002,81 @@ function yd_remove_update_data_event()
 }
 
 add_action('yd_update_data_event', 'yd_run_update_data_event');
+
+/**
+ * Самолечение крона: если по какой-то причине событие yd_update_data_event
+ * не зарегистрировано (например, плагин обновили через FTP без деактивации),
+ * регистрируем его на каждом init. Дёшево и идемпотентно.
+ * Плюс: если таблица ПВЗ пустая или устарела > 3 дней, один раз в час
+ * делаем принудительный рефреш — чтобы не ждать следующий cron tick.
+ */
+add_action( 'init', 'yd_ensure_crons_registered', 20 );
+function yd_ensure_crons_registered() {
+    if ( ! wp_next_scheduled( 'yd_update_data_event' ) ) {
+        wp_schedule_event( time() + 60, 'twicedaily', 'yd_update_data_event' );
+    }
+    if ( ! wp_next_scheduled( 'yd_status_sync_event' ) ) {
+        wp_schedule_event( time() + 120, 'every_two_hours', 'yd_status_sync_event' );
+    }
+}
+
+/**
+ * Ленивый рефреш справочника ПВЗ при запросе виджета — если данные устарели,
+ * пересобираем до того, как отдать пользователю неполный список. Throttling
+ * через transient (1 час), чтобы не дёргать API на каждый чих.
+ */
+add_action( 'init', 'yd_maybe_refresh_reception_points_stale', 30 );
+function yd_maybe_refresh_reception_points_stale() {
+    if ( wp_doing_cron() || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
+        return;
+    }
+    if ( ! function_exists( 'yd_is_reception_points_table_exist' ) ) {
+        return;
+    }
+    if ( get_transient( 'yd_pvz_refresh_throttle' ) ) {
+        return;
+    }
+    global $wpdb;
+    $table = $wpdb->prefix . 'yd_reception_points';
+    if ( ! yd_is_reception_points_table_exist() ) {
+        return;
+    }
+    $count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}`" );
+    // Если пусто — рефреш немедленно. Иначе — раз в сутки, ставим метку last_refresh.
+    $last_refresh = (int) get_option( 'yd_pvz_last_refresh', 0 );
+    $stale_after  = (int) apply_filters( 'yd_pvz_stale_after_seconds', 3 * DAY_IN_SECONDS );
+    $is_stale     = $count === 0 || ( time() - $last_refresh ) > $stale_after;
+    if ( ! $is_stale ) {
+        return;
+    }
+    // Троттлинг — один рефреш на час максимум.
+    set_transient( 'yd_pvz_refresh_throttle', 1, HOUR_IN_SECONDS );
+
+    // Ищем любой активный токен.
+    $token = '';
+    if ( class_exists( 'WC_Shipping_Zones' ) ) {
+        foreach ( WC_Shipping_Zones::get_zones() as $zone ) {
+            if ( empty( $zone['shipping_methods'] ) ) continue;
+            foreach ( $zone['shipping_methods'] as $m ) {
+                if ( strpos( $m->id, 'yd' ) !== false && $m->is_enabled() ) {
+                    $k = $m->get_option( 'key' );
+                    if ( ! empty( $k ) ) { $token = $k; break 2; }
+                }
+            }
+        }
+    }
+    if ( ! $token ) return;
+
+    if ( function_exists( 'yd_log' ) ) {
+        yd_log( sprintf( '[YD PVZ] auto-refresh: count=%d, last_refresh=%s, stale_after=%ds',
+            $count, $last_refresh ? date( 'Y-m-d H:i:s', $last_refresh ) : 'never', $stale_after ) );
+    }
+    yd_add_reception_points( $token );
+    if ( function_exists( 'yd_add_cities' ) ) {
+        yd_add_cities( $token );
+    }
+    update_option( 'yd_pvz_last_refresh', time(), false );
+}
 
 function yd_run_update_data_event()
 {
@@ -4394,6 +4469,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         }
 
         error_log('[YD] add_reception_points: inserted ' . $inserted . ' of ' . count($points));
+        // Метка последнего успешного рефреша — используется для stale-detection в yd_maybe_refresh_reception_points_stale()
+        update_option( 'yd_pvz_last_refresh', time(), false );
         return array( 'success' => true, 'count' => $inserted );
     }
 
