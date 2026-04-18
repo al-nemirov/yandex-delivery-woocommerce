@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.16.0-beta
+Version: 2.16.1-beta
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1019,6 +1019,65 @@ function yd_pvz_method_ids() {
     return (array) apply_filters( 'yd_pvz_method_ids', array( 'yd_self', 'yd_self_after' ) );
 }
 
+/**
+ * Флаг для wp-admin: BETA-тариф упал (скорее всего, не подключён в ЛК Яндекс.Доставки).
+ * Показываем баннер в админке, пока админ не кликнет "Скрыть" — чтобы настройка не пропала
+ * мимо глаз и метод не висел скрытым неделями.
+ */
+function yd_flag_beta_tariff_failure( $method_id, $tariff, $err_msg ) {
+    $flags = get_option( 'yd_beta_tariff_failures', array() );
+    if ( ! is_array( $flags ) ) { $flags = array(); }
+    $flags[ $method_id ] = array(
+        'tariff'  => (string) $tariff,
+        'error'   => (string) $err_msg,
+        'time'    => time(),
+    );
+    update_option( 'yd_beta_tariff_failures', $flags, false );
+}
+
+// Баннер в админке: BETA-тариф не работает.
+add_action( 'admin_notices', 'yd_beta_tariff_admin_notice' );
+function yd_beta_tariff_admin_notice() {
+    if ( ! current_user_can( 'manage_woocommerce' ) ) { return; }
+    $flags = get_option( 'yd_beta_tariff_failures', array() );
+    if ( empty( $flags ) || ! is_array( $flags ) ) { return; }
+    foreach ( $flags as $mid => $info ) {
+        if ( ! is_array( $info ) ) { continue; }
+        $tariff = isset( $info['tariff'] ) ? $info['tariff'] : '?';
+        $err    = isset( $info['error'] ) ? $info['error'] : '';
+        $when   = ! empty( $info['time'] ) ? date( 'd.m.Y H:i', (int) $info['time'] ) : '';
+        printf(
+            '<div class="notice notice-warning is-dismissible"><p>'
+            . '<strong>Яндекс Доставка (BETA):</strong> метод <code>%s</code> скрыт на чекауте — '
+            . 'тариф <code>%s</code> вернул ошибку API: <em>%s</em> (%s).<br>'
+            . 'Проверьте, подключён ли тариф в '
+            . '<a href="https://yandex.ru/delivery/" target="_blank" rel="noopener">ЛК Яндекс.Доставки</a>. '
+            . 'После исправления — <a href="%s">сбросить флаг</a>.'
+            . '</p></div>',
+            esc_html( $mid ),
+            esc_html( $tariff ),
+            esc_html( $err ),
+            esc_html( $when ),
+            esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=yd_reset_beta_failure&mid=' . rawurlencode( $mid ) ), 'yd_reset_beta_failure' ) )
+        );
+    }
+}
+
+add_action( 'admin_post_yd_reset_beta_failure', 'yd_reset_beta_failure_handler' );
+function yd_reset_beta_failure_handler() {
+    if ( ! current_user_can( 'manage_woocommerce' ) ) { wp_die( 'Forbidden' ); }
+    check_admin_referer( 'yd_reset_beta_failure' );
+    $mid = isset( $_GET['mid'] ) ? sanitize_text_field( wp_unslash( $_GET['mid'] ) ) : '';
+    $flags = get_option( 'yd_beta_tariff_failures', array() );
+    if ( is_array( $flags ) && isset( $flags[ $mid ] ) ) {
+        unset( $flags[ $mid ] );
+        update_option( 'yd_beta_tariff_failures', $flags, false );
+        delete_transient( 'yd_beta_fail_' . $mid );
+    }
+    wp_safe_redirect( wp_get_referer() ?: admin_url() );
+    exit;
+}
+
 register_activation_hook(__FILE__, 'yd_add_update_data_event');
 
 function yd_add_update_data_event()
@@ -1538,6 +1597,14 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
              */
             public $tariff = null;
 
+            /**
+             * BETA-методы (Express / Same-day): если Яндекс API вернёт ошибку —
+             * метод СКРЫВАЕТСЯ на чекауте вместо fallback на fixed_cost.
+             * Так мы не продадим клиенту «Экспресс за 350 ₽», если подписка
+             * в ЛК Яндекс.Доставки не подключена.
+             */
+            public $is_beta = false;
+
             public function __construct( $instance_id = 0 )
             {
                 parent::__construct();
@@ -1546,6 +1613,20 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     'shipping-zones',
                     'instance-settings'
                 );
+
+                // BETA-предупреждение прямо в настройках метода (WC → Shipping zones → [method])
+                if ( $this->is_beta ) {
+                    $this->method_description = sprintf(
+                        '<div style="padding:12px 14px;background:#fffbe6;border-left:4px solid #f0b429;border-radius:4px;margin:8px 0;">'
+                        . '<strong>⚠ BETA-метод.</strong> Тариф <code>%s</code> требует подключения в '
+                        . '<a href="https://yandex.ru/delivery/" target="_blank" rel="noopener">ЛК Яндекс.Доставки</a>.<br>'
+                        . 'Если тариф не подключён — метод автоматически <strong>скрывается</strong> на чекауте '
+                        . '(не показываем клиенту цену 350 ₽ по fallback). '
+                        . 'В wp-admin появится баннер с ошибкой API — не пропустите.'
+                        . '</div>',
+                        esc_html( (string) $this->tariff )
+                    );
+                }
 
                 $params = array(
                     'title'                               => array(
@@ -2114,6 +2195,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         $payload['places'],
                     ) ) );
 
+                    // Для BETA-методов: если мы недавно получили ошибку "тариф не подключён"
+                    // — не стучимся в API и сразу прячем метод. Кэш в transient на 1 час.
+                    $beta_fail_key = 'yd_beta_fail_' . $this->id;
+                    if ( $this->is_beta && get_transient( $beta_fail_key ) ) {
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[YD BETA] ' . $this->id . ': hidden (recent API failure cached)' );
+                        }
+                        return false;
+                    }
+
                     if ( ! isset( $GLOBALS['yd_pricing_cache'][ $cacheKey ] ) ) {
                         // Debug (only with WP_DEBUG, addresses masked for PII)
                         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -2148,11 +2239,33 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                             error_log( '[YD] pricing_total=' . ( $result['pricing_total'] ?? 'N/A' ) );
                         }
+                        // Успех — сбрасываем флаг "тариф не работает".
+                        if ( $this->is_beta ) {
+                            delete_transient( $beta_fail_key );
+                        }
                     } else {
+                        $apiErr = is_wp_error( $result ) ? $result->get_error_message() : 'pricing_total not found';
+
+                        // BETA-защита: ЛЮБАЯ ошибка API = метод скрыт.
+                        // Никакого fixed_cost fallback — клиент не должен получить «Экспресс за 350 ₽»,
+                        // если подписка в ЛК Яндекс.Доставки не подключена.
+                        if ( $this->is_beta ) {
+                            set_transient( $beta_fail_key, $apiErr, HOUR_IN_SECONDS );
+                            error_log( sprintf(
+                                '[YD BETA] %s: hidden on checkout — tariff "%s" API error: %s. '
+                                . 'Проверьте подключение тарифа в ЛК Яндекс.Доставки.',
+                                $this->id, $tariff, $apiErr
+                            ) );
+                            // Админу — одноразовое уведомление в wp-admin.
+                            if ( function_exists( 'yd_flag_beta_tariff_failure' ) ) {
+                                yd_flag_beta_tariff_failure( $this->id, $tariff, $apiErr );
+                            }
+                            return false;
+                        }
+
                         $fixedCost = (float) $this->get_option( 'fixed_cost', 350 );
                         $costReceived = $fixedCost;
                         // Fallback всегда логируем — это ошибка, не debug
-                        $apiErr = is_wp_error( $result ) ? $result->get_error_message() : 'pricing_total not found';
                         error_log( '[YD] fallback to fixed_cost=' . $fixedCost . ': ' . $apiErr );
                     }
 
@@ -2249,7 +2362,8 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
 
         // ─── BETA: Экспресс-курьер (доставка за 1-2 часа) ────────────────────────
         // Тариф Яндекса: 'express'. В ЛК Яндекс.Доставки должна быть включена подписка
-        // «Экспресс-доставка» — иначе pricing-calculator вернёт ошибку / fallback.
+        // «Экспресс-доставка» — если не включена, pricing-calculator вернёт ошибку,
+        // и метод будет СКРЫТ на чекауте (is_beta=true блокирует fixed_cost fallback).
         class WC_YD_Express_Method extends WC_YD_Parent_Method {
             public function __construct( $instance_id = 0 )
             {
@@ -2259,6 +2373,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $this->self_type            = false;
                 $this->payment_after        = false;
                 $this->tariff               = 'express';
+                $this->is_beta              = true;
                 parent::__construct( $instance_id );
                 $this->key = $this->get_option( 'key' );
             }
@@ -2275,6 +2390,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 $this->self_type            = false;
                 $this->payment_after        = false;
                 $this->tariff               = 'same_day';
+                $this->is_beta              = true;
                 parent::__construct( $instance_id );
                 $this->key = $this->get_option( 'key' );
             }
