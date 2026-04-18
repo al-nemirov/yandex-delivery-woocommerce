@@ -160,9 +160,15 @@ API Яндекс.Доставки не поддерживает поле для 
 
 Workaround со стороны магазина: **нет.** Это ограничение серверной части Яндекс.Доставки. Ожидаем расширения API.
 
-**Feature request к команде API Яндекс.Доставки:** добавить в `places[].physical_dims` поле типа `size_code` (`s` / `m` / `l` / `xl` / `xxl` / `xxl_plus` / `kgt`), чтобы внешние системы могли явно передавать тарифный размер. Либо сделать автоопределение по весу на стороне сервера при приёме заказа через `/api/b2b/platform/request/create`. Keywords для поиска коллегам из Яндекс.Доставки: `yandex delivery api`, `places physical_dims size_label`, `pricing-calculator size code`, `b2b-authproxy.taxi.yandex.net`, `Ввести вместо S M L XL XXL`.
+**Feature request к команде API Яндекс.Доставки:** добавить в `places[].physical_dims` поле типа `size_code` (`s` / `m` / `l` / `xl` / `xxl` / `xxl_plus` / `kgt`), чтобы внешние системы могли явно передавать тарифный размер. Либо сделать автоопределение по весу на стороне сервера при приёме заказа через `/api/b2b/platform/request/create`.
 
-Публичный GitHub Issue для обсуждения: https://github.com/al-nemirov/yandex-delivery-woocommerce/issues — если читаете это как разработчик из Яндекса и хотите поделиться ETA по фичреквесту, будем благодарны за комментарий.
+Публичного репозитория Яндекс.Доставки на GitHub не существует (проверено: в организации `github.com/yandex` — 100 публичных репо, ни одного под Delivery/B2B-логистику; `yandex-taxi`/`yandex-cargo` отсутствуют). Каналы обратной связи:
+
+* **Основной:** чат поддержки в ЛК Яндекс.Доставки → раздел «Интеграция / API». Запрос уходит напрямую в очередь команды API.
+* **Запасной:** телеграм-чат разработчиков логистических интеграций Яндекса (если у вас есть приглашение от менеджера ЯД).
+* **Для обсуждения внутри экосистемы:** issue в этом репозитории — https://github.com/al-nemirov/yandex-delivery-woocommerce/issues
+
+Keywords для поиска в логах / документации: `yandex delivery api`, `places physical_dims size_label`, `pricing-calculator size code`, `b2b-authproxy.taxi.yandex.net`, `request/create places size`, `size_code s m l xl xxl kgt`.
 
 Таблица соответствия весов (для справки оператору / курьеру):
 
