@@ -166,7 +166,7 @@ Workaround со стороны магазина: **нет.** Это ограни
 
 * **Основной:** чат поддержки в ЛК Яндекс.Доставки → раздел «Интеграция / API». Запрос уходит напрямую в очередь команды API.
 * **Запасной:** телеграм-чат разработчиков логистических интеграций Яндекса (если у вас есть приглашение от менеджера ЯД).
-* **Для обсуждения внутри экосистемы:** issue в этом репозитории — https://github.com/al-nemirov/yandex-delivery-woocommerce/issues
+* **Для обсуждения внутри экосистемы:** публичный тред по этому feature request — https://github.com/al-nemirov/yandex-delivery-woocommerce/issues/1
 
 Keywords для поиска в логах / документации: `yandex delivery api`, `places physical_dims size_label`, `pricing-calculator size code`, `b2b-authproxy.taxi.yandex.net`, `request/create places size`, `size_code s m l xl xxl kgt`.
 
