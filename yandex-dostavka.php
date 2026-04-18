@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.15.2
+Version: 2.15.3
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -3804,18 +3804,19 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         $like_exact      = $wpdb->esc_like( $city );
         $like_prefix     = $wpdb->esc_like( $city ) . '%';
         $like_contains   = '%' . $wpdb->esc_like( $city ) . '%';
-        $base_sql        = "SELECT code, name, city, lat, lng, schedule{$select_cash}
-             FROM `{$table}`
-             WHERE %s{$cod_where}
-             ORDER BY name LIMIT 500";
+
+        // Раньше стояло 500 — в Москве/СПб обрезало список. Поднимаем до 3000 и делаем фильтруемым.
+        $limit = (int) apply_filters( 'yd_pvz_query_limit', 3000, $city );
+        if ( $limit <= 0 ) { $limit = 3000; }
 
         // 1) Точное совпадение города (регистронезависимо)
         $results = $wpdb->get_results( $wpdb->prepare(
             "SELECT code, name, city, lat, lng, schedule{$select_cash}
              FROM `{$table}`
              WHERE LOWER(city) = %s{$cod_where}
-             ORDER BY name LIMIT 500",
-            $city_norm
+             ORDER BY name LIMIT %d",
+            $city_norm,
+            $limit
         ) );
 
         // 2) Префиксное совпадение ("Псков…")
@@ -3824,8 +3825,9 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 "SELECT code, name, city, lat, lng, schedule{$select_cash}
                  FROM `{$table}`
                  WHERE city LIKE %s{$cod_where}
-                 ORDER BY name LIMIT 500",
-                $like_prefix
+                 ORDER BY name LIMIT %d",
+                $like_prefix,
+                $limit
             ) );
         }
 
@@ -3835,8 +3837,25 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                 "SELECT code, name, city, lat, lng, schedule{$select_cash}
                  FROM `{$table}`
                  WHERE city LIKE %s{$cod_where}
-                 ORDER BY name LIMIT 500",
-                $like_contains
+                 ORDER BY name LIMIT %d",
+                $like_contains,
+                $limit
+            ) );
+        }
+
+        // Диагностика для админа: сколько всего ПВЗ в БД и сколько в этом городе (без лимита).
+        if ( function_exists( 'yd_log' ) ) {
+            $total_city = (int) $wpdb->get_var( $wpdb->prepare(
+                "SELECT COUNT(*) FROM `{$table}` WHERE LOWER(city) = %s{$cod_where}",
+                $city_norm
+            ) );
+            yd_log( sprintf(
+                '[YD PVZ] city="%s" cod=%d returned=%d city_total_in_db=%d (limit=%d)',
+                $city,
+                $payment_after ? 1 : 0,
+                is_array( $results ) ? count( $results ) : 0,
+                $total_city,
+                $limit
             ) );
         }
 
