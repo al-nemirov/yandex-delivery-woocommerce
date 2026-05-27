@@ -1,7 +1,7 @@
 === Яндекс Доставка для WooCommerce ===
 Contributors: al-nemirov
 Tags: доставка, woocommerce, яндекс, shipping, delivery, pvz, курьер, yandex-delivery, yandex-delivery-api, b2b-platform, pickup-points, same-day, express-delivery
-Stable tag: 2.16.2-beta
+Stable tag: 2.17.0
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
@@ -193,6 +193,15 @@ Twice-daily-крон обновления справочника ПВЗ сраб
 Защита от устаревших данных — lazy-refresh при фронт-запросе, если справочник старше 3 дней (настраивается фильтром `yd_pvz_stale_after_seconds`).
 
 == Changelog ==
+
+= 2.17.0 =
+
+*Отмена заявок через API + расширение API-клиента:*
+
+* **Отмена заявки через API.** Кнопка «Отменить заявку в ЯД» в карточке заказа — отмена через `/api/b2b/platform/request/cancel` без захода в ЛК Яндекс.Доставки. Работает для не-терминальных статусов.
+* **Автоотмена при пересоздании.** «Пересоздать заявку» теперь автоматически отменяет старую заявку в ЯД перед созданием новой (silent mode).
+* **Актуальная дата доставки.** `actual_info` синхронизируется в yd_sync_order_statuses() для не-терминальных заказов — ожидаемая дата + интервал отображаются в мета-боксе.
+* **9 новых API-методов.** cancel_request, confirm_offer, get_offers_info, get_actual_info, get_requests_info, edit_request, get_edit_status, get_datetime_options, detect_location — полное покрытие B2B Platform API v2.
 
 = 2.16.2-beta =
 

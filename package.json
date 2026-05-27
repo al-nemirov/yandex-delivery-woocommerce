@@ -1,6 +1,6 @@
 {
   "name": "yandex-dostavka",
-  "version": "2.2.1",
+  "version": "2.17.0",
   "private": true,
   "scripts": {
     "build": "webpack"

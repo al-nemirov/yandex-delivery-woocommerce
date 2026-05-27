@@ -560,15 +560,156 @@ class Yandex_Delivery_API {
         return new WP_Error( 'yd_api_error', 'Не удалось разобрать ответ акта' );
     }
 
-    // ─── Delivery Methods ────────────────────────────────────
+    // ─── Cancel ─────────────────────────────────────────────
 
     /**
-     * Получить доступные методы доставки.
+     * Отменить заявку в Яндекс Доставке.
      *
-     * @param float $lat  Latitude
-     * @param float $lon  Longitude
+     * Ограничение: курьерскую заявку можно отменить только до статуса
+     * DELIVERY_TRANSPORTATION_RECIPIENT.
+     *
+     * @param string $request_id ID заявки в ЯД
+     * @return array|WP_Error  { status: CREATED|SUCCESS|ERROR, reason, description }
+     */
+    public function cancel_request( $request_id ) {
+        return $this->post( '/api/b2b/platform/request/cancel', array(
+            'request_id' => (string) $request_id,
+        ) );
+    }
+
+    // ─── Offers ──────────────────────────────────────────────
+
+    /**
+     * Бронирование выбранного варианта доставки (оффера).
+     *
+     * Flow: offers/create → выбор оффера → offers/confirm → получаем request_id.
+     *
+     * @param string $offer_id ID оффера из ответа offers/create
+     * @return array|WP_Error  { request_id: string }
+     */
+    public function confirm_offer( $offer_id ) {
+        return $this->post( '/api/b2b/platform/offers/confirm', array(
+            'offer_id' => (string) $offer_id,
+        ) );
+    }
+
+    /**
+     * Получить расписание вывозов в регионы.
+     *
+     * @param array $params Query-параметры: station_id, full_address, is_oversized,
+     *                      last_mile_policy (time_interval|self_pickup), self_pickup_id, send_unix
+     * @return array|WP_Error  { offers: [ { from, to } ] }
+     */
+    public function get_offers_info( $params = array() ) {
+        return $this->get( '/api/b2b/platform/offers/info', $params );
+    }
+
+    // ─── Actual Info ─────────────────────────────────────────
+
+    /**
+     * Получить актуальную дату и время доставки.
+     *
+     * Работает для заказов не в терминальном статусе (не DELIVERED/ERROR/CANCELLED).
+     *
+     * @param string $request_id
+     * @return array|WP_Error  { delivery_date, delivery_interval: { from, to } }
+     */
+    public function get_actual_info( $request_id ) {
+        return $this->get(
+            '/api/b2b/platform/request/actual_info',
+            array( 'request_id' => (string) $request_id )
+        );
+    }
+
+    // ─── Batch Requests Info ─────────────────────────────────
+
+    /**
+     * Получить информацию о заявках за период (пакетный запрос).
+     *
+     * Возвращает полные данные по заявкам включая available_actions
+     * (какие модификации разрешены: update_dates, update_address, update_items и т.д.).
+     *
+     * @param string      $from        UTC timestamp начала периода (ISO 8601)
+     * @param string      $to          UTC timestamp конца периода (ISO 8601)
+     * @param array|null  $request_ids Необязательный фильтр по ID заявок
+     * @return array|WP_Error  { requests: [ RequestReport ] }
+     */
+    public function get_requests_info( $from, $to, $request_ids = null ) {
+        $body = array(
+            'from' => $from,
+            'to'   => $to,
+        );
+        if ( is_array( $request_ids ) && ! empty( $request_ids ) ) {
+            $body['request_ids'] = $request_ids;
+        }
+        return $this->post( '/api/b2b/platform/requests/info', $body );
+    }
+
+    // ─── Edit Request ────────────────────────────────────────
+
+    /**
+     * Редактировать заказ: данные получателя, интервал доставки, грузоместа.
+     *
+     * Перед изменением дат нужно запросить datetime_options.
+     * Проверить доступность через available_actions из requests/info.
+     *
+     * @param string $request_id
+     * @param array  $data {
+     *     @type array  $recipient_info { first_name, last_name, patronymic, phone, email }
+     *     @type array  $destination    { interval_utc: { from, to } }
+     *     @type array  $places         [ { barcode, place: { barcode, physical_dims } } ]
+     * }
+     * @return array|WP_Error  { edit_id: string }
+     */
+    public function edit_request( $request_id, $data = array() ) {
+        $body = array_merge( array( 'request_id' => (string) $request_id ), $data );
+        return $this->post( '/api/b2b/platform/request/edit', $body );
+    }
+
+    /**
+     * Получить статус запроса на редактирование.
+     *
+     * @param string $edit_id ID из ответа edit_request
      * @return array|WP_Error
      */
+    public function get_edit_status( $edit_id ) {
+        return $this->post( '/api/b2b/platform/request/edit/status', array(
+            'edit_id' => (string) $edit_id,
+        ) );
+    }
+
+    /**
+     * Получить доступные интервалы доставки для текущего места получения.
+     *
+     * Необходимо вызвать перед edit_request при смене даты.
+     *
+     * @param string $request_id
+     * @return array|WP_Error  { options: [ { from, to } ] }
+     */
+    public function get_datetime_options( $request_id ) {
+        return $this->post( '/api/b2b/platform/request/datetime_options', array(
+            'request_id' => (string) $request_id,
+        ) );
+    }
+
+    // ─── Location ────────────────────────────────────────────
+
+    /**
+     * Определить geo_id населённого пункта по адресу или фрагменту.
+     *
+     * Полезно для более точного подбора ПВЗ (передать geo_id в pickup-points/list).
+     *
+     * @param string $location  Адрес или его фрагмент (напр. "Москва")
+     * @return array|WP_Error   { variants: [ { geo_id: int, address: string } ] }
+     */
+    public function detect_location( $location ) {
+        return $this->post( '/api/b2b/platform/location/detect', array(
+            'location' => (string) $location,
+        ) );
+    }
+
+    // ─── Delivery Methods ────────────────────────────────────
+
     /**
      * @deprecated Uses /b2b/cargo/integration/v1/ (logistics API), not /b2b/platform/ (delivery API).
      *             Verify endpoint compatibility before use. May require different contract.

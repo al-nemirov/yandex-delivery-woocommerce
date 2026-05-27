@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.16.2-beta
+Version: 2.17.0
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -1559,6 +1559,18 @@ function yd_sync_order_statuses() {
         if ( ! is_wp_error( $history ) && ! empty( $hist_events ) ) {
             $order->update_meta_data( 'yd_tracking_history', wp_json_encode( $hist_events ) );
         }
+
+        // Актуальная дата доставки (actual_info) — только для не-терминальных статусов
+        if ( ! yd_is_terminal_status_code( $statusCode ) ) {
+            $actual = $yd_client->get_actual_info( $trackingNumber );
+            if ( ! is_wp_error( $actual ) && isset( $actual['delivery_date'] ) ) {
+                $order->update_meta_data( 'yd_delivery_date', sanitize_text_field( $actual['delivery_date'] ) );
+                if ( isset( $actual['delivery_interval'] ) ) {
+                    $order->update_meta_data( 'yd_delivery_interval', wp_json_encode( $actual['delivery_interval'] ) );
+                }
+            }
+        }
+
         $order->update_meta_data( 'yd_last_sync', current_time( 'd.m.Y H:i:s' ) );
 
         // Если статус изменился — записываем
@@ -1754,6 +1766,89 @@ function yd_is_delivered_status( $statusName ) {
         if ( mb_stripos( $statusName, $keyword ) !== false ) {
             return true;
         }
+    }
+    return false;
+}
+
+/**
+ * Отменить заявку в Яндекс Доставке через API.
+ *
+ * @param WC_Order $order  WooCommerce заказ
+ * @param bool     $silent Если true — не добавляет order_note при ошибке (для resend)
+ * @return bool    true если отмена успешна или уже отменена
+ */
+function yd_cancel_request_via_api( $order, $silent = false ) {
+    $trackingNumber = $order->get_meta( 'yd_tracking_number' );
+    if ( empty( $trackingNumber ) ) {
+        if ( ! $silent ) {
+            $order->add_order_note( 'ЯД: нет tracking_number для отмены.' );
+            $order->save();
+        }
+        return false;
+    }
+
+    // Проверяем — уже в терминальном статусе?
+    $lastCode = (string) $order->get_meta( 'yd_last_status_code' );
+    if ( yd_is_terminal_status_code( $lastCode ) ) {
+        if ( ! $silent ) {
+            $order->add_order_note( 'ЯД: заявка уже в терминальном статусе (' . $lastCode . '), отмена не требуется.' );
+            $order->save();
+        }
+        return true;
+    }
+
+    // Получаем API-токен из настроек метода доставки
+    $shippingData = bxbGetShippingData( $order );
+    if ( ! isset( $shippingData['object'] ) ) {
+        if ( ! $silent ) {
+            $order->add_order_note( 'ЯД: не удалось получить настройки доставки для отмены.' );
+            $order->save();
+        }
+        return false;
+    }
+
+    $key = $shippingData['object']->get_option( 'key' );
+    if ( empty( $key ) ) {
+        if ( ! $silent ) {
+            $order->add_order_note( 'ЯД: API-токен не настроен, отмена невозможна.' );
+            $order->save();
+        }
+        return false;
+    }
+
+    $yd_client = new Yandex_Delivery_API( $key );
+    $result    = $yd_client->cancel_request( $trackingNumber );
+
+    if ( is_wp_error( $result ) ) {
+        $msg = 'ЯД: ошибка отмены заявки — ' . $result->get_error_message();
+        yd_log_always( $msg . ' | order #' . $order->get_id() );
+        if ( ! $silent ) {
+            $order->add_order_note( $msg );
+            $order->save();
+        }
+        return false;
+    }
+
+    $status = isset( $result['status'] ) ? $result['status'] : 'unknown';
+    $desc   = isset( $result['description'] ) ? $result['description'] : '';
+
+    if ( $status === 'SUCCESS' || $status === 'CREATED' ) {
+        $note = 'ЯД: заявка ' . $trackingNumber . ' отменена (' . $status . '). ' . $desc;
+        yd_log_always( $note . ' | order #' . $order->get_id() );
+        $order->update_meta_data( 'yd_last_status', 'Отменена' );
+        $order->update_meta_data( 'yd_last_status_code', 'CANCELLED' );
+        $order->update_meta_data( 'yd_last_status_date', current_time( 'd.m.Y H:i' ) );
+        $order->add_order_note( $note );
+        $order->save();
+        return true;
+    }
+
+    // Статус ERROR или другой
+    $note = 'ЯД: отмена заявки вернула статус ' . $status . '. ' . $desc;
+    yd_log_always( $note . ' | order #' . $order->get_id() );
+    if ( ! $silent ) {
+        $order->add_order_note( $note );
+        $order->save();
     }
     return false;
 }
@@ -3025,6 +3120,24 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p style="margin:8px 0;"><a class="button" href="' . esc_url( $yd_share ) . '" target="_blank" rel="noopener noreferrer">Отслеживание для получателя (Яндекс)</a></p>';
                 }
 
+                // Актуальная дата доставки из меты (обновляется при синхронизации)
+                $yd_delivery_date = $order->get_meta( 'yd_delivery_date' );
+                $yd_delivery_interval = $order->get_meta( 'yd_delivery_interval' );
+                if ( $yd_delivery_date ) {
+                    $dateFormatted = date_i18n( 'd.m.Y', strtotime( $yd_delivery_date ) );
+                    $intervalStr   = '';
+                    if ( $yd_delivery_interval ) {
+                        $interval = json_decode( $yd_delivery_interval, true );
+                        if ( is_array( $interval ) && isset( $interval['from'], $interval['to'] ) ) {
+                            // Формат "10:00+03:00" → "10:00"
+                            $from = preg_replace( '/\+.*$/', '', $interval['from'] );
+                            $to   = preg_replace( '/\+.*$/', '', $interval['to'] );
+                            $intervalStr = ' с ' . $from . ' до ' . $to;
+                        }
+                    }
+                    echo '<p style="color:#0073aa;margin:6px 0;">&#128666; Ожидаемая доставка: <strong>' . esc_html( $dateFormatted . $intervalStr ) . '</strong></p>';
+                }
+
                 // Способ оплаты
                 $paymentTitle  = $order->get_payment_method_title();
                 if ( yd_order_is_pay_on_receipt_for_yd_api( $order, $shippingData['method_id'] ) ) {
@@ -3047,10 +3160,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
                     echo '<p><input type="submit" class="add_note button" name="yd_create_act" value="Сформировать акт" title="Сгенерировать акт приёма-передачи в Яндекс Доставке. Нужен при сдаче посылки в пункт приёма."></p>';
                 }
 
+                // Кнопка «Отменить заявку в ЯД» — отмена через API (не только локально)
+                $lastStatusCode = $order->get_meta( 'yd_last_status_code' );
+                if ( ! yd_is_terminal_status_code( $lastStatusCode ) ) {
+                    echo '<hr style="margin:8px 0;">';
+                    echo '<p><input type="submit" class="button" name="yd_cancel_request" value="Отменить заявку в ЯД" onclick="return confirm(\'Отменить заявку в Яндекс Доставке? Это действие необратимо.\');" style="color:#a00;border-color:#daa;font-size:12px;" title="Отправить запрос на отмену заявки в API Яндекс Доставки."></p>';
+                }
+
                 // Сброс (настройка show_reset_button)
                 if ( $shippingData['object']->get_option( 'show_reset_button' ) === '1' ) {
-                    echo '<hr style="margin:8px 0;">';
-                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Пересоздать заявку" onclick="return confirm(\'Пересоздать заявку в ЯД? Старый заказ нужно отменить в ЛК Яндекс Доставки вручную.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Удалить данные текущей заявки и создать новую в Яндекс Доставке. Старую заявку отмените в ЛК ЯД."></p>';
+                    echo '<p><input type="submit" class="button" name="yd_resend_parsel" value="Пересоздать заявку" onclick="return confirm(\'Пересоздать заявку? Старая будет автоматически отменена в ЯД.\');" style="color:#999;border-color:#ccc;font-size:11px;" title="Отменить текущую заявку в ЯД и создать новую."></p>';
                 }
 
                 // Показываем сохранённый трекинг из меты (без лишних API-запросов)
@@ -3193,6 +3312,7 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
         elseif ( isset( $_POST['yd_refresh_status'] ) ) { $action_key = 'refresh_' . $postId; }
         elseif ( isset( $_POST['yd_create_act'] ) ) { $action_key = 'act_' . $postId; }
         elseif ( isset( $_POST['yd_download_label'] ) ) { $action_key = 'label_' . $postId; }
+        elseif ( isset( $_POST['yd_cancel_request'] ) ) { $action_key = 'cancel_' . $postId; }
         if ( $action_key && isset( $processed[ $action_key ] ) ) {
             return;
         }
@@ -3218,11 +3338,25 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             yd_log_always( 'yd_create_parsel detected for order #' . $postId );
             yd_get_tracking_code( $postId );
         }
-        if ( isset( $_POST['yd_resend_parsel'] ) ) {
-            yd_log_always( 'yd_resend_parsel detected for order #' . $postId );
-            // Очищаем старые данные и создаём заново
+
+        // ── Отмена заявки в ЯД через API ──
+        if ( isset( $_POST['yd_cancel_request'] ) ) {
+            yd_log_always( 'yd_cancel_request detected for order #' . $postId );
             $order = wc_get_order( $postId );
             if ( $order ) {
+                yd_cancel_request_via_api( $order );
+            }
+        }
+
+        if ( isset( $_POST['yd_resend_parsel'] ) ) {
+            yd_log_always( 'yd_resend_parsel detected for order #' . $postId );
+            // Автоматически отменяем старую заявку в ЯД перед пересозданием
+            $order = wc_get_order( $postId );
+            if ( $order ) {
+                $oldTrack = $order->get_meta( 'yd_tracking_number' );
+                if ( ! empty( $oldTrack ) ) {
+                    yd_cancel_request_via_api( $order, true ); // silent = true
+                }
                 $order->delete_meta_data( 'yd_tracking_number' );
                 $order->delete_meta_data( 'yd_link' );
                 $order->delete_meta_data( 'yd_act_link' );
