@@ -245,12 +245,7 @@ class YD_MoySklad {
 			'applicable'    => false, // Создаём как черновик (не проведён)
 			'agent'         => array( 'meta' => $agent_meta ),
 			'organization'  => array( 'meta' => $organization_meta ),
-			'description'   => sprintf(
-				/* translators: 1: order id, 2: order url */
-				__( 'WooCommerce #%1$s | %2$s', 'yandex-dostavka' ),
-				$order_number,
-				$order->get_edit_order_url()
-			),
+			'description'   => self::build_order_description( $order ),
 			'positions'      => $positions,
 		);
 
@@ -323,31 +318,41 @@ class YD_MoySklad {
 		return $rows[0]['meta'];
 	}
 
+	/**
+	 * Всегда возвращает фиксированного контрагента «Физ. Лицо».
+	 * Если опция wc_ms_fixed_counterparty_id задана (из woocommerce-moysklad-sync) — используем её.
+	 * Иначе ищем «Физ. Лицо» в МС по имени.
+	 * Реальные данные клиента передаются в поле description заказа.
+	 */
 	private static function get_or_create_counterparty( $order, $headers ) {
-		$email = $order->get_billing_email();
-		if ( $email ) {
-			$url = self::API_BASE . 'entity/counterparty?filter=email=' . rawurlencode( $email ) . '&limit=1';
+		// Приоритет: UUID из настроек woocommerce-moysklad-sync
+		$fixed_uuid = get_option( 'wc_ms_fixed_counterparty_id', '' );
+		if ( $fixed_uuid !== '' ) {
+			$url      = self::API_BASE . 'entity/counterparty/' . rawurlencode( $fixed_uuid );
 			$response = wp_remote_get( $url, array( 'timeout' => 15, 'headers' => $headers ) );
 			if ( ! is_wp_error( $response ) ) {
 				$data = json_decode( wp_remote_retrieve_body( $response ), true );
-				if ( ! empty( $data['rows'][0]['meta'] ) ) {
-					return $data['rows'][0]['meta'];
+				if ( ! empty( $data['meta'] ) ) {
+					return $data['meta'];
 				}
 			}
 		}
 
-		$name = trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() );
-		if ( $name === '' ) {
-			$name = $order->get_billing_company() ?: __( 'Покупатель', 'yandex-dostavka' );
+		// Ищем «Физ. Лицо» по имени
+		$name = 'Физ. Лицо';
+		$url  = self::API_BASE . 'entity/counterparty?filter=name=' . rawurlencode( $name ) . '&limit=1';
+		$response = wp_remote_get( $url, array( 'timeout' => 15, 'headers' => $headers ) );
+		if ( ! is_wp_error( $response ) ) {
+			$data = json_decode( wp_remote_retrieve_body( $response ), true );
+			if ( ! empty( $data['rows'][0]['meta'] ) ) {
+				return $data['rows'][0]['meta'];
+			}
 		}
-		$create = array(
-			'name'  => $name,
-			'email' => $order->get_billing_email() ?: '',
-			'phone' => $order->get_billing_phone() ?: '',
-		);
+
+		// Создаём «Физ. Лицо» один раз
 		$response = wp_remote_post(
 			self::API_BASE . 'entity/counterparty',
-			array( 'timeout' => 20, 'headers' => $headers, 'body' => wp_json_encode( $create ) )
+			array( 'timeout' => 20, 'headers' => $headers, 'body' => wp_json_encode( array( 'name' => $name ) ) )
 		);
 		if ( is_wp_error( $response ) ) {
 			return $response;
@@ -355,9 +360,24 @@ class YD_MoySklad {
 		$code = wp_remote_retrieve_response_code( $response );
 		$data = json_decode( wp_remote_retrieve_body( $response ), true );
 		if ( $code >= 400 || empty( $data['meta'] ) ) {
-			return new WP_Error( 'moysklad_counterparty', isset( $data['errors'][0]['error'] ) ? $data['errors'][0]['error'] : __( 'Не удалось создать контрагента.', 'yandex-dostavka' ) );
+			return new WP_Error( 'moysklad_counterparty', isset( $data['errors'][0]['error'] ) ? $data['errors'][0]['error'] : 'Не удалось создать контрагента «Физ. Лицо».' );
+		}
+		// Сохраняем UUID для следующих вызовов
+		if ( ! empty( $data['id'] ) ) {
+			update_option( 'wc_ms_fixed_counterparty_id', $data['id'] );
 		}
 		return $data['meta'];
+	}
+
+	/** Описание заказа с данными клиента (контрагент = «Физ. Лицо», клиент — в описании). */
+	private static function build_order_description( $order ) {
+		$host  = parse_url( get_site_url(), PHP_URL_HOST ) ?: get_site_url();
+		$name  = trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() );
+		$phone = $order->get_billing_phone();
+		$email = $order->get_billing_email();
+		$city  = $order->get_billing_city();
+		$parts = array_filter( [ $name, $phone, $email, $city ] );
+		return sprintf( '%s #%s | %s', $host, $order->get_order_number(), implode( ' | ', $parts ) );
 	}
 
 	/**
