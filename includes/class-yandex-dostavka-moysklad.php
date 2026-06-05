@@ -319,9 +319,9 @@ class YD_MoySklad {
 	}
 
 	/**
-	 * Всегда возвращает фиксированного контрагента «Физ. Лицо».
+	 * Всегда возвращает фиксированного контрагента «Физическое лицо».
 	 * Если опция wc_ms_fixed_counterparty_id задана (из woocommerce-moysklad-sync) — используем её.
-	 * Иначе ищем «Физ. Лицо» в МС по имени.
+	 * Иначе ищем «Физическое лицо» в МС по имени.
 	 * Реальные данные клиента передаются в поле description заказа.
 	 */
 	private static function get_or_create_counterparty( $order, $headers ) {
@@ -338,8 +338,8 @@ class YD_MoySklad {
 			}
 		}
 
-		// Ищем «Физ. Лицо» по имени
-		$name = 'Физ. Лицо';
+		// Ищем «Физическое лицо» по имени
+		$name = 'Физическое лицо';
 		$url  = self::API_BASE . 'entity/counterparty?filter=name=' . rawurlencode( $name ) . '&limit=1';
 		$response = wp_remote_get( $url, array( 'timeout' => 15, 'headers' => $headers ) );
 		if ( ! is_wp_error( $response ) ) {
@@ -349,10 +349,11 @@ class YD_MoySklad {
 			}
 		}
 
-		// Создаём «Физ. Лицо» один раз
+		// Создаём «Физическое лицо» один раз. companyType=individual → в МС тип «Физическое лицо»
+		// (без него МойСклад по умолчанию делает контрагента Юрлицом).
 		$response = wp_remote_post(
 			self::API_BASE . 'entity/counterparty',
-			array( 'timeout' => 20, 'headers' => $headers, 'body' => wp_json_encode( array( 'name' => $name ) ) )
+			array( 'timeout' => 20, 'headers' => $headers, 'body' => wp_json_encode( array( 'name' => $name, 'companyType' => 'individual' ) ) )
 		);
 		if ( is_wp_error( $response ) ) {
 			return $response;
@@ -360,7 +361,7 @@ class YD_MoySklad {
 		$code = wp_remote_retrieve_response_code( $response );
 		$data = json_decode( wp_remote_retrieve_body( $response ), true );
 		if ( $code >= 400 || empty( $data['meta'] ) ) {
-			return new WP_Error( 'moysklad_counterparty', isset( $data['errors'][0]['error'] ) ? $data['errors'][0]['error'] : 'Не удалось создать контрагента «Физ. Лицо».' );
+			return new WP_Error( 'moysklad_counterparty', isset( $data['errors'][0]['error'] ) ? $data['errors'][0]['error'] : 'Не удалось создать контрагента «Физическое лицо».' );
 		}
 		// Сохраняем UUID для следующих вызовов
 		if ( ! empty( $data['id'] ) ) {
@@ -369,7 +370,7 @@ class YD_MoySklad {
 		return $data['meta'];
 	}
 
-	/** Описание заказа с данными клиента (контрагент = «Физ. Лицо», клиент — в описании). */
+	/** Описание заказа с данными клиента (контрагент = «Физическое лицо», клиент — в описании). */
 	private static function build_order_description( $order ) {
 		$host  = parse_url( get_site_url(), PHP_URL_HOST ) ?: get_site_url();
 		$name  = trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() );
