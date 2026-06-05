@@ -3,7 +3,7 @@
 Plugin Name: Яндекс Доставка для WooCommerce
 Plugin URI: https://github.com/al-nemirov/yandex-delivery-woocommerce
 Description: Интеграция WooCommerce с Яндекс Доставкой: расчёт стоимости, выбор ПВЗ, выгрузка заказов, автоматическая синхронизация статусов
-Version: 2.17.1
+Version: 2.17.2
 Author: Al Nemirov
 Author URI: https://github.com/al-nemirov
 License: GPLv2 or later
@@ -4621,9 +4621,16 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
             $shipping_method_name  = $shipping_method_parts[0];
 
             if ( in_array( $shipping_method_name, yd_all_method_ids(), true ) ) {
-                if ( isset( $_COOKIE['yd_pvz_code'], $_COOKIE['yd_pvz_address'] ) ) {
-                    $order->update_meta_data( 'yd_code', sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) );
-                    $order->update_meta_data( 'yd_address', sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) ) );
+                // Приоритет — hidden-поле формы (текущий выбор), фолбэк — cookie.
+                $yd_code_val = ! empty( $_POST['yd_code'] )
+                    ? sanitize_text_field( wp_unslash( $_POST['yd_code'] ) )
+                    : ( isset( $_COOKIE['yd_pvz_code'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['yd_pvz_code'] ) ) : '' );
+                $yd_addr_val = ! empty( $_POST['yd_address'] )
+                    ? sanitize_text_field( wp_unslash( $_POST['yd_address'] ) )
+                    : ( isset( $_COOKIE['yd_pvz_address'] ) ? sanitize_text_field( rawurldecode( wp_unslash( $_COOKIE['yd_pvz_address'] ) ) ) : '' );
+                if ( $yd_code_val !== '' ) {
+                    $order->update_meta_data( 'yd_code', $yd_code_val );
+                    $order->update_meta_data( 'yd_address', $yd_addr_val );
                     $order->save();
                 }
                 if ( get_current_user_id() > 0 ) {
@@ -5345,6 +5352,13 @@ if ( in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', g
     }
 
     add_action( 'woocommerce_after_checkout_validation', 'yd_validate_checkout', 10, 2 );
+
+    // Hidden-поля формы для выбранного ПВЗ ЯД (надёжнее cookie при оформлении).
+    // JS (yd-pvz-widget.js) заполняет их при выборе пункта; пустеют при перезагрузке.
+    add_action( 'woocommerce_after_order_notes', function () {
+        echo '<input type="hidden" name="yd_code" id="yd_code" value="">';
+        echo '<input type="hidden" name="yd_address" id="yd_address" value="">';
+    } );
 
     /**
      * Минимизация полей чекаута: оставляем только имя, фамилию, телефон, email, город, страну, регион.

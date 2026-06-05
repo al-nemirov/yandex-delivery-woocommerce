@@ -251,6 +251,13 @@
             document.cookie = 'yd_pvz_address=' + encodeURIComponent(point.address || '') + ';path=/;SameSite=Lax';
             document.cookie = 'yd_pvz_cash_allowed=' + (point.cash_allowed === 0 ? '0' : '1') + ';path=/;SameSite=Lax';
 
+            // Надёжный источник при оформлении: hidden-поля формы (cookie остаётся для расчёта тарифа).
+            // Поле пустеет при перезагрузке → заставляет выбрать ПВЗ заново (фикс «старого» пункта).
+            (function (id, addr) {
+                var c = document.getElementById('yd_code');   if (c) { c.value = id; }
+                var a = document.getElementById('yd_address'); if (a) { a.value = addr; }
+            })(point.id, point.address || '');
+
             if (typeof this.onSelect === 'function') {
                 this.onSelect(point);
                 // update_checkout вызывается из onSelect callback (yandex-dostavka.js)
